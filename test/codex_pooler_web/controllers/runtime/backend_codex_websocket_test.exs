@@ -14466,10 +14466,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       {:codex_response_chunk, task_pid, frame} ->
         result = CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
 
-        if StreamProtocol.internal_control_event?(frame) do
-          receive_socket_push(state, timeout_ms)
-        else
-          result
+        case result do
+          {:ok, state} ->
+            receive_socket_push(state, timeout_ms)
+
+          {:push, _frame, state} ->
+            if StreamProtocol.internal_control_event?(frame),
+              do: receive_socket_push(state, timeout_ms),
+              else: result
+
+          other ->
+            other
+        end
+
+      {:codex_response_done, pid, result} ->
+        state = Map.update(state, :test_consumed_socket_completions, 1, &(&1 + 1))
+
+        case CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state) do
+          {:ok, state} -> receive_socket_push(state, timeout_ms)
+          result -> result
         end
     after
       timeout_ms -> flunk("expected websocket response chunk")

@@ -304,11 +304,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     socket =
       case order do
         :terminal_first ->
-          next = receive_completed_only_arbitration_terminal(socket, terminal)
+          assert_receive {:websocket_owner_frame, _, _, _, {:data, ^terminal}} = message,
+                         @handoff_detection_timeout_ms
+
+          assert {:ok, socket} = CodexResponsesSocket.handle_info(message, socket)
+          assert map_size(socket.native_pending_terminals) == 1
 
           assert :sys.get_state(owner).active_turn.terminal_forwarded?
           send(sender, {:arbitration_release, barrier})
-          next
+          receive_completed_only_arbitration_terminal(socket, terminal)
 
         :result_first ->
           assert_receive {:arbitration_frame, ^barrier, deliver}, @handoff_detection_timeout_ms
@@ -2909,7 +2913,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                        terminal_message,
                      5_000
 
-      assert {:push, {:text, ^terminal}, state} =
+      assert {:ok, state} =
                CodexResponsesSocket.handle_info(terminal_message, state)
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, _owner_turn_id, :complete} =
@@ -2920,7 +2924,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert_receive {:websocket_response_activity, ^task_pid, activity_token} = activity_message
       assert {:ok, state} = CodexResponsesSocket.handle_info(activity_message, state)
       assert_receive {:codex_response_done, ^task_pid, _result} = done_message
-      assert {:ok, state} = CodexResponsesSocket.handle_info(done_message, state)
+
+      assert {:push, {:text, ^terminal}, state} =
+               CodexResponsesSocket.handle_info(done_message, state)
 
       assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
                        delivery_message
@@ -2976,7 +2982,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                       {:data, ^terminal}} =
                        terminal_message
 
-      assert {:push, {:text, ^terminal}, remote_state} =
+      assert {:ok, remote_state} =
                CodexResponsesSocket.handle_info(terminal_message, remote_state)
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, _owner_turn_id, :complete} =
@@ -2991,7 +2997,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                CodexResponsesSocket.handle_info(activity_message, remote_state)
 
       assert_receive {:codex_response_done, ^task_pid, _result} = done_message
-      assert {:ok, remote_state} = CodexResponsesSocket.handle_info(done_message, remote_state)
+
+      assert {:push, {:text, ^terminal}, remote_state} =
+               CodexResponsesSocket.handle_info(done_message, remote_state)
 
       assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
                        delivery_message
@@ -10353,14 +10361,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                fn _data -> :ok end
              )
 
-    Map.update(state, :tasks, MapSet.new([self()]), &MapSet.put(&1, self()))
+    # The synchronous gateway return supplies the settlement signal that a
+    # ResponseTask would send to the socket after finalization.
+    state
+    |> Map.update(:tasks, MapSet.new([self()]), &MapSet.put(&1, self()))
+    |> Map.update(:response_task_cleanup_results, %{self() => :ok}, &Map.put(&1, self(), :ok))
   end
 
   defp receive_owner_continuity_complete(:direct, state), do: receive_socket_done(state)
 
   defp receive_owner_continuity_complete(:proxy, state) do
     case receive_owner_socket_complete(state) do
-      {:ok, state} -> {:ok, Map.update!(state, :tasks, &MapSet.delete(&1, self()))}
+      {:ok, state} ->
+        {:ok,
+         state
+         |> Map.update!(:tasks, &MapSet.delete(&1, self()))
+         |> Map.update(:response_task_cleanup_results, %{}, &Map.delete(&1, self()))}
     end
   end
 
@@ -10813,20 +10829,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   defp receive_receiver_delivery_gap_frames(task_pid, state, events) do
     receive do
       {:codex_response_chunk, ^task_pid, data} = message ->
-        assert {:push, {:text, pushed}, state} = CodexResponsesSocket.handle_info(message, state)
-        assert CodexPooler.JSON.decode!(pushed) == CodexPooler.JSON.decode!(data)
-        event = CodexPooler.JSON.decode!(pushed)["type"]
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:push, {:text, pushed}, state} ->
+            assert CodexPooler.JSON.decode!(pushed) == CodexPooler.JSON.decode!(data)
 
-        events =
-          if event in ["response.created", "response.output_item.done", "response.completed"],
-            do: events ++ [event],
-            else: events
+            receive_receiver_delivery_gap_frames(
+              task_pid,
+              state,
+              delivery_gap_events(events, pushed)
+            )
 
+          {:ok, state} ->
+            receive_receiver_delivery_gap_frames(task_pid, state, events)
+        end
+
+      {:websocket_response_activity, ^task_pid, _token} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
         receive_receiver_delivery_gap_frames(task_pid, state, events)
+
+      {:codex_response_done, ^task_pid, _result} = message ->
+        state = Map.put(state, :test_delivery_gap_result_consumed?, true)
+
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:push, {:text, pushed}, state} ->
+            receive_receiver_delivery_gap_frames(
+              task_pid,
+              state,
+              delivery_gap_events(events, pushed)
+            )
+
+          {:ok, state} ->
+            receive_receiver_delivery_gap_frames(task_pid, state, events)
+        end
     after
       @handoff_detection_timeout_ms ->
         flunk("expected queued provider frame at the direct receiver")
     end
+  end
+
+  defp delivery_gap_events(events, pushed) do
+    event = CodexPooler.JSON.decode!(pushed)["type"]
+
+    if event in ["response.created", "response.output_item.done", "response.completed"],
+      do: events ++ [event],
+      else: events
+  end
+
+  defp receive_receiver_delivery_gap_result(
+         _pid,
+         %{test_delivery_gap_result_consumed?: true} = state
+       ),
+       do: Map.delete(state, :test_delivery_gap_result_consumed?)
+
+  defp receive_receiver_delivery_gap_result(
+         _pid,
+         %{test_consumed_socket_completions: count} = state
+       )
+       when count > 0 do
+    assert {:ok, state} = receive_socket_done(state)
+    state
   end
 
   defp receive_receiver_delivery_gap_result(task_pid, state) do
@@ -11688,6 +11749,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp handle_native_collect_socket_push_message(message, state) do
+    state = remember_consumed_socket_completion(message, state)
+
     case CodexResponsesSocket.handle_info(message, state) do
       {:push, {:text, frame}, state} = result ->
         if StreamProtocol.internal_control_event?(frame) do
@@ -11702,6 +11765,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp handle_owner_socket_push_message(message, state) do
+    state = remember_consumed_socket_completion(message, state)
+
     case CodexResponsesSocket.handle_info(message, state) do
       {:push, {:text, frame}, state} = result ->
         if StreamProtocol.internal_control_event?(frame) do
@@ -11740,10 +11805,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp handle_owner_socket_raw_push_message(message, state) do
+    state = remember_consumed_socket_completion(message, state)
+
     case CodexResponsesSocket.handle_info(message, state) do
       {:push, {:text, _frame}, _state} = result -> result
       {:ok, state} -> receive_owner_socket_raw_push(state)
     end
+  end
+
+  defp remember_consumed_socket_completion({:codex_response_done, _, _}, state),
+    do: Map.update(state, :test_consumed_socket_completions, 1, &(&1 + 1))
+
+  defp remember_consumed_socket_completion(message, state) do
+    if Adapter.accept_downstream_message(message, state) == {:ok, :complete},
+      do: Map.update(state, :test_consumed_owner_completions, 1, &(&1 + 1)),
+      else: state
+  end
+
+  defp receive_owner_socket_complete(%{test_consumed_owner_completions: count} = state)
+       when count > 0 do
+    {:ok, Map.put(state, :test_consumed_owner_completions, count - 1)}
   end
 
   defp receive_owner_socket_complete(state) do
@@ -11784,8 +11865,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           receive_owner_socket_complete(next_state)
         end
 
-      {:push, _frame, state} ->
-        receive_owner_socket_complete(state)
+      {:push, _frame, next_state} ->
+        if accepted_completion?,
+          do: {:ok, next_state},
+          else: receive_owner_socket_complete(next_state)
 
       {:stop, _reason, _detail, _state} = stop ->
         stop

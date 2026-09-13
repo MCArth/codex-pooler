@@ -1106,7 +1106,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   def await_public_websocket_upgrade(conn, ref, status, response_headers) do
     receive do
-      message ->
+      message
+      when is_tuple(message) and tuple_size(message) >= 2 and
+             elem(message, 0) in [:tcp, :tcp_closed, :tcp_error, :ssl, :ssl_closed, :ssl_error] ->
         case Mint.WebSocket.stream(conn, message) do
           {:ok, conn, responses} ->
             status = websocket_status_part(responses, ref) || status
@@ -1179,7 +1181,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         timeout_ms \\ @detection_timeout_ms
       ) do
     receive do
-      message ->
+      message
+      when is_tuple(message) and tuple_size(message) >= 2 and
+             elem(message, 0) in [:tcp, :tcp_closed, :tcp_error, :ssl, :ssl_closed, :ssl_error] ->
         case Mint.WebSocket.stream(conn, message) do
           {:ok, conn, responses} ->
             case decode_public_websocket_close(websocket, ref, responses) do
@@ -1222,7 +1226,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   defp receive_public_websocket_text!(conn, websocket, ref) do
     receive do
-      message ->
+      message
+      when is_tuple(message) and tuple_size(message) >= 2 and
+             elem(message, 0) in [:tcp, :tcp_closed, :tcp_error, :ssl, :ssl_closed, :ssl_error] ->
         case Mint.WebSocket.stream(conn, message) do
           {:ok, conn, responses} ->
             case decode_public_websocket_text(websocket, ref, responses) do
@@ -1444,10 +1450,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       {:codex_response_chunk, task_pid, frame} ->
         result = CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
 
-        if internal_control_frame?(frame) do
-          receive_socket_push(state)
-        else
-          result
+        case result do
+          {:ok, next_state} ->
+            receive_socket_push(next_state)
+
+          {:push, _frame, next_state} when is_binary(frame) ->
+            if internal_control_frame?(frame), do: receive_socket_push(next_state), else: result
+
+          other ->
+            other
+        end
+
+      {:codex_response_done, pid, result} ->
+        # Completion can release a held terminal. Remember that this real done
+        # message was consumed so receive_socket_done need not dispatch it twice.
+        state = Map.update(state, :test_consumed_socket_completions, 1, &(&1 + 1))
+
+        case CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state) do
+          {:ok, state} -> receive_socket_push(state)
+          result -> result
         end
     after
       @detection_timeout_ms -> flunk("expected websocket response chunk")
@@ -1458,14 +1479,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     StreamProtocol.internal_control_event?(frame)
   end
 
-  def receive_socket_done(state, timeout_ms \\ @detection_timeout_ms) do
+  def receive_socket_done(state, timeout_ms \\ @detection_timeout_ms)
+
+  def receive_socket_done(%{test_consumed_socket_completions: count} = state, _timeout_ms)
+      when count > 0 do
+    state =
+      if count == 1,
+        do: Map.delete(state, :test_consumed_socket_completions),
+        else: Map.put(state, :test_consumed_socket_completions, count - 1)
+
+    flush_socket_delivery_messages({:ok, state})
+  end
+
+  def receive_socket_done(state, timeout_ms) do
     receive do
       {:codex_response_done, pid, result} ->
         CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state)
+        |> flush_socket_delivery_messages()
     after
       timeout_ms -> flunk("expected websocket response completion")
     end
   end
+
+  defp flush_socket_delivery_messages({:ok, state}) do
+    receive do
+      {:websocket_response_delivery_complete, _, _} = message ->
+        message
+        |> CodexResponsesSocket.handle_info(state)
+        |> flush_socket_delivery_messages()
+    after
+      0 -> {:ok, state}
+    end
+  end
+
+  defp flush_socket_delivery_messages(result), do: result
 
   def assignment_for_response("resp_ws_first", first_assignment, _second_assignment),
     do: first_assignment

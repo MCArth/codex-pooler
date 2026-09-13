@@ -179,13 +179,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     final_frame = ~s({"type":"response.done","response":{"id":"resp_final_safe"}})
 
-    assert {:push, {:text, ^final_frame}, draining_state} =
+    assert {:ok, draining_state} =
              CodexResponsesSocket.handle_info(
                {:codex_response_chunk, task_pid, final_frame},
                revoked_state
              )
 
-    assert {:stop, :normal, @api_key_revocation_close, closed_state} =
+    assert {:stop, :normal, @api_key_revocation_close, [{:text, ^final_frame}], closed_state} =
              CodexResponsesSocket.handle_info(
                {:codex_response_done, task_pid, :ok},
                draining_state
@@ -536,6 +536,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       opts: RequestOptions.for_websocket(%{}),
       tasks: MapSet.new([task_pid]),
       task_monitors: %{},
+      response_task_cleanup_results: %{task_pid => :ok},
+      native_pending_terminals: %{},
       native_turn_output_task_pids: MapSet.new()
     }
 
@@ -1830,6 +1832,138 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert logs =~ "request_id=ws-owner-drain-late-native-log"
   end
 
+  test "native completion waits for settlement while deltas continue to stream" do
+    for owner <- [:direct, :local], order <- [:terminal_first, :result_first] do
+      pid = owner_turn_pid()
+      on_exit(fn -> send(pid, :stop) end)
+      token = make_ref()
+      state = native_settlement_state(pid, token, owner)
+      delta = ~s({"type":"response.output_text.delta","delta":"hello"})
+      terminal = ~s({"type":"response.completed","response":{"id":"resp_settled"}})
+      chunk = fn data -> native_settlement_chunk(owner, pid, data) end
+      done = {:codex_response_done, pid, {:socket_response_result, :local_complete, :ok}}
+
+      assert {:push, {:text, ^delta}, state} =
+               CodexResponsesSocket.handle_info(chunk.(delta), state)
+
+      {first, second} =
+        if order == :terminal_first, do: {chunk.(terminal), done}, else: {done, chunk.(terminal)}
+
+      assert {:ok, waiting} = CodexResponsesSocket.handle_info(first, state)
+      refute_received {:websocket_response_delivery_complete, ^pid, ^token}
+
+      assert {:push, {:text, ^terminal}, settled} =
+               CodexResponsesSocket.handle_info(second, waiting)
+
+      assert MapSet.member?(settled.response_task_completed_terminals, pid)
+      assert settled.native_pending_terminals == %{}
+      assert_receive {:websocket_response_delivery_complete, ^pid, ^token}
+    end
+  end
+
+  test "remote native completion joins terminal, proxy result, and owner settlement in any order" do
+    for order <- [
+          [:terminal, :done, :complete],
+          [:done, :terminal, :complete],
+          [:terminal, :complete, :done],
+          [:complete, :terminal, :done],
+          [:done, :complete, :terminal],
+          [:complete, :done, :terminal]
+        ] do
+      pid = owner_turn_pid()
+      on_exit(fn -> send(pid, :stop) end)
+      token = make_ref()
+      state = native_settlement_state(pid, token, :remote)
+      terminal = ~s({"type":"response.completed","response":{"id":"resp_remote_settled"}})
+
+      messages = %{
+        terminal: native_settlement_chunk(:remote, pid, terminal),
+        done:
+          {:codex_response_done, pid, {:socket_response_result, :owner_completion_pending, :ok}},
+        complete: {:websocket_owner_frame, "corr-settlement", 30, pid, :complete}
+      }
+
+      [first, second, third] = Enum.map(order, &Map.fetch!(messages, &1))
+      assert {:ok, state} = CodexResponsesSocket.handle_info(first, state)
+      assert {:ok, state} = CodexResponsesSocket.handle_info(second, state)
+      assert {:push, {:text, ^terminal}, state} = CodexResponsesSocket.handle_info(third, state)
+      assert state.native_pending_terminals == %{}
+      assert_receive {:websocket_response_delivery_complete, ^pid, ^token}
+    end
+  end
+
+  test "failed settlement discards held success and stale chunks cannot publish it" do
+    for owner <- [:direct, :local, :remote] do
+      pid = owner_turn_pid()
+      on_exit(fn -> send(pid, :stop) end)
+      token = make_ref()
+      state = native_settlement_state(pid, token, owner)
+      terminal = ~s({"type":"response.completed","response":{"id":"resp_failed_settlement"}})
+      error = %{status: 500, code: :settlement_failed, message: "settlement failed", param: nil}
+
+      assert {:ok, held} =
+               CodexResponsesSocket.handle_info(
+                 native_settlement_chunk(owner, pid, terminal),
+                 state
+               )
+
+      assert {:push, {:text, failure}, failed} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_done, pid, {:error, error}},
+                 held
+               )
+
+      assert CodexPooler.JSON.decode!(failure)["error"]["code"] == "settlement_failed"
+      assert failed.native_pending_terminals == %{}
+
+      assert {:ok, ^failed} =
+               CodexResponsesSocket.handle_info(
+                 native_settlement_chunk(owner, pid, terminal),
+                 failed
+               )
+
+      stale_pid = owner_turn_pid()
+      on_exit(fn -> send(stale_pid, :stop) end)
+
+      assert {:ok, ^failed} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_chunk, stale_pid, terminal},
+                 failed
+               )
+    end
+  end
+
+  defp native_settlement_state(pid, token, owner) do
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([pid]),
+      task_monitors: %{},
+      response_task_activities: %{pid => token},
+      queued_response_payloads: :queue.new()
+    }
+
+    if owner == :direct do
+      state
+    else
+      Map.merge(state, %{
+        codex_session: %{
+          owner_instance_id: if(owner == :local, do: Atom.to_string(node()), else: "remote")
+        },
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 30,
+          correlation_id: "corr-settlement",
+          active_turn_reconnect?: false
+        }
+      })
+    end
+  end
+
+  defp native_settlement_chunk(:direct, pid, data), do: {:codex_response_chunk, pid, data}
+
+  defp native_settlement_chunk(_owner, pid, data),
+    do: {:websocket_owner_frame, "corr-settlement", 30, pid, {:data, data}}
+
   test "rollout drain waits after proxy task result until the native owner terminal is delivered" do
     harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
     parent = self()
@@ -1890,7 +2024,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_terminal_safe"}})
 
-    assert {:push, {:text, ^terminal}, terminal_state} =
+    assert {:ok, terminal_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
                 {:data, terminal}},
@@ -1899,7 +2033,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert Process.alive?(drain_task.pid)
 
-    assert {:ok, completed_state} =
+    assert {:push, {:text, ^terminal}, completed_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
                 :complete},
@@ -1941,7 +2075,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_compact_terminal"}})
 
-    assert {:push, {:text, ^terminal}, terminal_state} =
+    assert {:ok, terminal_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid,
                 {:data, terminal}},
@@ -1959,7 +2093,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert owner_complete_state.tasks == MapSet.new([task_pid])
     assert :queue.len(owner_complete_state.queued_response_payloads) == 1
 
-    assert {:ok, finalized_state} =
+    assert {:push, {:text, ^terminal}, finalized_state} =
              CodexResponsesSocket.handle_info(
                {:codex_response_done, task_pid,
                 {:socket_response_result, :owner_completion_pending, :ok}},
@@ -2030,14 +2164,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_late_activity"}})
 
-    assert {:push, {:text, ^terminal}, terminal_state} =
+    assert {:ok, terminal_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-local-owner-late-activity", 26, task_pid,
                 {:data, terminal}},
                state
              )
 
-    assert {:ok, finalized_state} =
+    assert {:push, {:text, ^terminal}, finalized_state} =
              CodexResponsesSocket.handle_info(
                {:codex_response_done, task_pid,
                 {:socket_response_result, :owner_completion_pending, :ok}},
@@ -2058,18 +2192,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert :queue.is_empty(activity_state.queued_response_payloads)
   end
 
-  test "reconnected socket joins the inherited owner terminal and task result before delivery" do
+  test "inherited owner terminal preserves delivery without a result on the replacement socket" do
     task_pid = owner_turn_pid()
     on_exit(fn -> send(task_pid, :stop) end)
-    activity_token = make_ref()
 
     state = %{
       opts: RequestOptions.for_websocket(%{}),
       tasks: MapSet.new(),
       task_monitors: %{},
-      response_task_activities: %{task_pid => activity_token},
-      response_task_results_ready: MapSet.new(),
-      response_task_terminals_accepted: MapSet.new(),
       queued_response_payloads: :queue.new(),
       websocket_owner_active_turn_reconnect?: true,
       websocket_owner_reconnect_turn_pid: nil,
@@ -2078,40 +2208,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         epoch: 27,
         correlation_id: "corr-reconnected-owner-barrier",
         active_turn_reconnect?: true
-      },
-      native_turn_output_task_pids: MapSet.new()
+      }
     }
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_reconnected"}})
 
-    assert {:push, {:text, ^terminal}, terminal_state} =
+    assert {:push, {:text, ^terminal}, state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
                 {:data, terminal}},
                state
              )
 
-    assert terminal_state.websocket_owner_reconnect_turn_pid == task_pid
-    assert MapSet.member?(terminal_state.response_task_terminals_accepted, task_pid)
-
-    assert {:ok, finalized_state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
-               terminal_state
-             )
-
-    assert MapSet.member?(finalized_state.response_task_results_ready, task_pid)
-
-    assert {:ok, owner_complete_state} =
+    assert {:ok, state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
                 :complete},
-               finalized_state
+               state
              )
 
-    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
-    refute owner_complete_state.websocket_owner_active_turn_reconnect?
+    refute state.websocket_owner_active_turn_reconnect?
   end
 
   test "natural proxy terminal already scheduled for delivery wins a concurrent drain cancellation" do
@@ -2160,14 +2276,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     terminal = ~s({"type":"response.completed","response":{"id":"resp_terminal_race"}})
 
-    assert {:push, {:text, ^terminal}, terminal_state} =
+    assert {:ok, terminal_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
                 {:data, terminal}},
                result_state
              )
 
-    assert {:ok, completed_state} =
+    assert {:push, {:text, ^terminal}, completed_state} =
              CodexResponsesSocket.handle_info(
                {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
                 :complete},

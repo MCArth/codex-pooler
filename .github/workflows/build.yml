@@ -64,12 +64,12 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/icoretech/codex-pooler
+          images: ghcr.io/mcarth/codex-pooler
           labels: |
             org.opencontainers.image.title=Codex Pooler
             org.opencontainers.image.description=Managed pools of Codex accounts with OpenAI-compatible client routes
-            org.opencontainers.image.source=https://github.com/icoretech/codex-pooler
-            org.opencontainers.image.documentation=https://github.com/icoretech/codex-pooler/blob/main/README.md
+            org.opencontainers.image.source=https://github.com/MCArth/codex-pooler
+            org.opencontainers.image.documentation=https://github.com/MCArth/codex-pooler/blob/main/README.md
             org.opencontainers.image.vendor=iCoreTech, Inc.
             org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
             org.opencontainers.image.version=${{ steps.prepare.outputs.version }}

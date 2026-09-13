@@ -151,13 +151,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
       tracked_response_task?(state, task_pid) and
           not Adapter.public_responses_stream?(state) ->
-        state =
-          state
-          |> maybe_mark_native_turn_output_pushed(task_pid, data)
-          |> maybe_accept_response_task_terminal(task_pid, data)
-          |> maybe_schedule_accepted_response_task_delivery(task_pid)
-
-        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+        native_chunk_result(data, task_pid, state)
 
       true ->
         {:ok, state}
@@ -166,8 +160,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   def handle_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
     case Adapter.accept_recovered_runtime(message, state) do
-      {:ok, state} -> {:ok, reset_owner_turn_output(state)}
-      :drop -> {:ok, state}
+      {:ok, state} ->
+        {:ok,
+         state
+         |> Map.put(:native_pending_terminals, %{})
+         |> reset_owner_turn_output()}
+
+      :drop ->
+        {:ok, state}
     end
   end
 
@@ -251,10 +251,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
       |> mark_response_task_result_ready(pid)
       |> put_response_task_cleanup_result(pid, result)
+      |> mark_native_local_completion(pid, result)
+
+    {terminal, state} =
+      if response_task_cleanup_result(result) == :ok do
+        take_settled_native_terminal(state, pid)
+      else
+        {nil, discard_native_terminal(state, pid)}
+      end
 
     result =
       pid
       |> handle_response_done(result, state)
+      |> push_settled_native_terminal(terminal)
       |> maybe_schedule_response_delivery(pid)
 
     close_if_revoked_idle(result)
@@ -300,6 +309,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
     state =
       state
+      |> Map.put(:native_pending_terminals, %{})
       |> clear_pending_owner_handoff(owner_monitor_handoff_outcome(reason), cancel?: false)
       |> maybe_abort_public_owner_turn(:owner_monitor_down)
 
@@ -520,6 +530,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:response_task_results_ready, MapSet.new())
     |> Map.put(:response_task_terminals_accepted, MapSet.new())
     |> Map.put(:response_task_completed_terminals, MapSet.new())
+    |> Map.put(:native_pending_terminals, %{})
+    |> Map.put(:native_local_completions, MapSet.new())
     |> Map.put(:response_task_cleanup_results, %{})
     |> Map.put(:native_owner_terminal_delivered?, false)
     |> Map.put(:websocket_owner_pending_handoff, nil)
@@ -875,19 +887,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload({:data, data}, state) do
-    state =
-      case active_native_owner_turn_pid(state) do
-        pid when is_pid(pid) ->
-          state
-          |> maybe_mark_active_native_owner_turn_output(data)
-          |> maybe_accept_response_task_terminal(pid, data)
-          |> maybe_schedule_accepted_response_task_delivery(pid)
+    case active_native_owner_turn_pid(state) do
+      pid when is_pid(pid) ->
+        if tracked_response_task?(state, pid) do
+          native_chunk_result(data, pid, state)
+        else
+          # Inherited owner turns send their task result to the original socket.
+          state =
+            state
+            |> maybe_mark_native_turn_output_pushed(pid, data)
+            |> maybe_accept_response_task_terminal(pid, data)
+            |> maybe_schedule_accepted_response_task_delivery(pid)
 
-        nil ->
-          state
-      end
+          {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+        end
 
-    {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+      nil ->
+        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+    end
   end
 
   defp handle_non_public_owner_payload({:error, :owner_drained, payload}, state) do
@@ -900,6 +917,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> discard_native_terminal(active_native_owner_turn_pid(state))
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> cancel_tracked_response_tasks(:owner_drained)
       |> reset_owner_turn_output()
@@ -909,10 +927,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload({:error, _reason, payload}, state) do
-    {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, state}
+    pid = active_native_owner_turn_pid(state)
+    encoded = CodexPooler.JSON.encode!(Adapter.websocket_error(payload))
+    state = discard_native_terminal(state, pid)
+
+    state =
+      if is_pid(pid), do: maybe_accept_response_task_terminal(state, pid, encoded), else: state
+
+    {:push, {:text, encoded}, state}
   end
 
   defp handle_non_public_owner_payload(:complete, state) do
+    pid = active_native_owner_turn_pid(state)
+
     state =
       state
       |> Map.put(:websocket_owner_active_turn_reconnect?, false)
@@ -920,13 +947,91 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> reset_owner_turn_output()
       |> maybe_schedule_finalized_owner_task_delivery()
 
-    {:ok, state}
+    {terminal, state} = take_settled_native_terminal(state, pid)
+    push_settled_native_terminal({:ok, state}, terminal)
   end
+
+  # A client can submit its next request as soon as it sees response.completed,
+  # including on a new socket. Publish success only after the turn is persisted.
+  defp native_chunk_result(_data, _pid, %{websocket_owner_drain_observed?: true} = state),
+    do: {:ok, state}
+
+  defp native_chunk_result(data, pid, state) do
+    if match?({:ok, %{kind: :completed}}, StreamProtocol.terminal_outcome(data)) do
+      if Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :error do
+        {:ok, state}
+      else
+        state =
+          Map.update(state, :native_pending_terminals, %{pid => data}, &Map.put(&1, pid, data))
+
+        {terminal, state} = take_settled_native_terminal(state, pid)
+        push_settled_native_terminal({:ok, state}, terminal)
+      end
+    else
+      state =
+        state
+        |> discard_terminal_on_failure(pid, data)
+        |> maybe_mark_native_turn_output_pushed(pid, data)
+        |> maybe_accept_response_task_terminal(pid, data)
+        |> maybe_schedule_accepted_response_task_delivery(pid)
+
+      {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+    end
+  end
+
+  defp take_settled_native_terminal(state, pid) do
+    data = Map.get(Map.get(state, :native_pending_terminals, %{}), pid)
+    successful? = Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :ok
+
+    owner_settled? =
+      not owner_forwarded_socket?(state) or local_owner_socket?(state) or
+        MapSet.member?(Map.get(state, :native_local_completions, MapSet.new()), pid) or
+        Map.get(state, :native_owner_terminal_delivered?, false)
+
+    if is_binary(data) and successful? and owner_settled? do
+      state =
+        state
+        |> maybe_mark_native_turn_output_pushed(pid, data)
+        |> maybe_accept_response_task_terminal(pid, data)
+        |> discard_native_terminal(pid)
+        |> maybe_schedule_accepted_response_task_delivery(pid)
+
+      {Adapter.downstream_response_chunk(data), state}
+    else
+      {nil, state}
+    end
+  end
+
+  defp push_settled_native_terminal({:ok, state}, terminal) when is_binary(terminal),
+    do: {:push, {:text, terminal}, state}
+
+  defp push_settled_native_terminal(result, _terminal), do: result
+
+  defp discard_terminal_on_failure(state, pid, data) do
+    if match?({:ok, _}, StreamProtocol.terminal_outcome(data)),
+      do: discard_native_terminal(state, pid),
+      else: state
+  end
+
+  defp discard_native_terminal(state, pid) do
+    if Map.has_key?(state, :native_pending_terminals),
+      do: Map.update!(state, :native_pending_terminals, &Map.delete(&1, pid)),
+      else: state
+  end
+
+  defp mark_native_local_completion(state, pid, {:socket_response_result, :local_complete, :ok}) do
+    if response_task_delivery_candidate?(state, pid),
+      do: Map.update(state, :native_local_completions, MapSet.new([pid]), &MapSet.put(&1, pid)),
+      else: state
+  end
+
+  defp mark_native_local_completion(state, _pid, _result), do: state
 
   defp maybe_schedule_finalized_owner_task_delivery(state) do
     case active_native_owner_turn_pid(state) do
       pid when is_pid(pid) ->
-        if response_task_result_ready?(state, pid) do
+        if response_task_result_ready?(state, pid) and
+             native_terminal_delivery_ready?(state, pid) do
           schedule_response_task_delivery(state, pid, :completed)
         else
           state
@@ -2686,7 +2791,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         Map.get(state, :public_response_task_pid) != pid
 
       true ->
-        Map.get(state, :native_owner_terminal_delivered?, false)
+        Map.get(state, :native_owner_terminal_delivered?, false) and
+          native_terminal_delivery_ready?(state, pid)
     end
   end
 
@@ -2768,6 +2874,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_cleanup_results, %{}, &Map.delete(&1, pid))
+        |> Map.update(:native_local_completions, MapSet.new(), &MapSet.delete(&1, pid))
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
         |> Map.put(:native_owner_terminal_delivered?, false)
@@ -2819,7 +2926,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp response_task_cleanup_outcome(_state, _pid, _token, _ack_pid, _registry), do: :aborted
 
   defp put_response_task_cleanup_result(state, pid, result) do
-    if tracked_response_task?(state, pid) do
+    if response_task_delivery_candidate?(state, pid) do
       outcome = response_task_cleanup_result(result)
 
       Map.update(
@@ -2926,6 +3033,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state =
       state
+      |> discard_native_terminal(pid)
       |> Map.update(
         :response_task_delivery_recipients,
         %{pid => ack_pid},
@@ -3007,8 +3115,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     MapSet.member?(Map.get(state, :response_task_terminals_accepted, MapSet.new()), pid)
   end
 
+  defp native_terminal_delivery_ready?(state, pid) do
+    response_task_terminal_accepted?(state, pid) or
+      Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :error
+  end
+
   defp response_task_delivery_candidate?(state, pid) when is_pid(pid) do
     tracked_response_task?(state, pid) or
+      Map.has_key?(Map.get(state, :native_pending_terminals, %{}), pid) or
       (Map.get(state, :websocket_owner_active_turn_reconnect?, false) and
          Map.get(state, :websocket_owner_reconnect_turn_pid) == pid)
   end
@@ -3225,6 +3339,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
+    |> discard_native_terminal(pid)
     |> clear_direct_cleanup(pid)
     |> DownstreamSession.clear_cleanup_witness(pid)
   end
@@ -3240,7 +3355,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp remove_tracked_response_task(state, pid, monitor)
        when is_pid(pid) and is_reference(monitor) do
     case Map.get(Map.get(state, :task_monitors, %{}), pid) do
-      ^monitor -> remove_tracked_response_task(state, pid)
+      ^monitor -> state |> discard_native_terminal(pid) |> remove_tracked_response_task(pid)
       _unknown -> state
     end
   end
@@ -3658,21 +3773,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         nil ->
           false
       end
-    end
-  end
-
-  defp mark_active_native_owner_turn_output(state) do
-    case active_native_owner_turn_pid(state) do
-      pid when is_pid(pid) -> mark_native_turn_output_pushed(state, pid)
-      nil -> state
-    end
-  end
-
-  defp maybe_mark_active_native_owner_turn_output(state, data) do
-    if StreamProtocol.internal_control_event?(data) do
-      state
-    else
-      mark_active_native_owner_turn_output(state)
     end
   end
 
