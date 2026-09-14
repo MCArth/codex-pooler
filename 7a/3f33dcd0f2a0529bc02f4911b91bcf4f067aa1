@@ -1,0 +1,47 @@
+lib/codex_pooler/accounting/lifecycle/request_lifecycle/reservation.ex
+  s_206b7f0308bdd5::t_b5b68df63259b7 12,14,24,538-539,550-563
+lib/codex_pooler/gateway/persistence/session_continuity/turn_lifecycle.ex
+  s_206b7f0308bdd5::t_dec8029be646e4 45,74-84,522-534
+lib/codex_pooler/gateway/runtime/finalization/interruption.ex
+  s_206b7f0308bdd5::t_d3ff266106632f 59,71-72,84-88
+lib/codex_pooler/gateway/runtime/service.ex
+  s_206b7f0308bdd5::t_f0588e213b44ef 20,1837-1871,1889,1930-1932
+test/codex_pooler/gateway/websocket/direct_cleanup_postgres_test.exs
+  s_206b7f0308bdd5::t_b2b259d39296f6 180-296
+test/codex_pooler_web/controllers/runtime/backend_codex_websocket_continuation_test.exs
+  s_38215783565a00::t_7edf95c88fa03c 12-97
+test/codex_pooler_web/controllers/runtime/backend_codex_websocket_owner_forwarding_test.exs
+  s_6d4a766637dcf3::t_65b6da687028f1 5259-5264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a3f33dcd0f2a0529bc02f4911b91bcf4f067aa1",
+  "prompts": {},
+  "sessions": {
+    "s_206b7f0308bdd5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09e9d-8f5c-7743-9f69-6f3584b462e0",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Arthur <mcarth99@gmail.com>"
+    },
+    "s_38215783565a00": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09a92-290e-7571-a8a4-b4907eec050c",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Arthur <mcarth99@gmail.com>"
+    },
+    "s_6d4a766637dcf3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09e96-6cfa-70c3-b0dd-f330f0e0c3e8",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Arthur <mcarth99@gmail.com>"
+    }
+  }
+}
