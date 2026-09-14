@@ -9,6 +9,92 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketContinuationTest do
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Repo
 
+  test "overlapping distinct requests wait for their shared turn" do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+    end)
+
+    release = make_ref()
+
+    terminal =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_overlap",
+           "status" => "completed",
+           "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+         }
+       }}
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.barrier_sse_stream([terminal],
+             barrier_after: 0,
+             notify: self(),
+             release_ref: release
+           ),
+           FakeUpstream.sse_stream([terminal])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = Ecto.UUID.generate()
+    turn_id = Ecto.UUID.generate()
+    first = start_client(port, setup, turn_state, turn_id, "first")
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release}, 5_000
+    second = start_client(port, setup, turn_state, turn_id, "second")
+
+    try do
+      wait_for_accepted(setup.pool.id, 100)
+
+      assert Task.yield(second, 200) == nil
+      assert FakeUpstream.count(upstream) == 1
+    after
+      send(upstream_pid, {:fake_upstream_release_chunk, release})
+    end
+
+    assert %{"type" => "response.completed"} = Task.await(first, 10_000)
+    assert %{"type" => "response.completed"} = Task.await(second, 10_000)
+    assert FakeUpstream.count(upstream) == 2
+
+    assert Repo.aggregate(
+             from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "succeeded"),
+             :count
+           ) == 2
+  end
+
+  defp start_client(port, setup, turn_state, turn_id, text) do
+    Task.async(fn ->
+      {conn, ws, ref} = public_websocket_connect!(port, setup, turn_state)
+
+      try do
+        {conn, ws} = public_websocket_send_text!(conn, ws, ref, payload(setup, turn_id, text))
+        {_conn, _ws, terminal} = public_websocket_receive_text!(conn, ws, ref)
+        CodexPooler.JSON.decode!(terminal)
+      after
+        Mint.HTTP.close(conn)
+      end
+    end)
+  end
+
+  defp wait_for_accepted(_pool_id, 0), do: flunk("second request was not accepted")
+
+  defp wait_for_accepted(pool_id, remaining) do
+    if Repo.exists?(from r in Request, where: r.pool_id == ^pool_id and r.status == "accepted") do
+      :ok
+    else
+      Process.sleep(20)
+      wait_for_accepted(pool_id, remaining - 1)
+    end
+  end
+
   for owner_forwarding <- [false, true], reconnect <- [false, true] do
     @tag owner_forwarding: owner_forwarding, reconnect: reconnect
     test "completion commits before a same-turn continuation reconnects (owner=#{owner_forwarding}, reconnect=#{reconnect})",

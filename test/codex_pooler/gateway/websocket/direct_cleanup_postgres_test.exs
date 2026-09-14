@@ -177,4 +177,121 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
       {setup, session}
     end)
   end
+
+  test "cancelled accepted request is cleaned while its predecessor remains active" do
+    {setup, session} = fixture()
+
+    Sandbox.unboxed_run(Repo, fn ->
+      {:ok, current} =
+        Accounting.reserve(setup.auth, setup.model, %{}, %{
+          transport: "websocket",
+          requested_model: setup.model.exposed_model_id,
+          correlation_id: Ecto.UUID.generate()
+        })
+
+      {:ok, current_turn} = Websocket.start_codex_turn(session, current.request)
+      current_request = Repo.reload!(current.request)
+
+      {:ok, %{request: queued}} =
+        Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+          correlation_id: Ecto.UUID.generate(),
+          endpoint: "/backend-api/codex/responses"
+        })
+
+      receipt = %{
+        session_id: session.id,
+        request_id: queued.id,
+        correlation_id: queued.correlation_id,
+        api_key_id: setup.api_key.id
+      }
+
+      assert :ok = DirectCleanup.interrupt(receipt, "client_disconnected")
+      assert %{status: "failed", last_error_code: "client_disconnected"} = Repo.reload!(queued)
+      assert Repo.reload!(current_request) == current_request
+      assert Repo.reload!(current_turn) == current_turn
+      assert Repo.reload!(session).status == "active"
+
+      assert Repo.aggregate(from(e in LedgerEntry, where: e.request_id == ^queued.id), :count) ==
+               0
+    end)
+  end
+
+  test "timed out unstarted claim keeps its audit row and permits the identical retry" do
+    {setup, _session} = fixture()
+
+    Sandbox.unboxed_run(Repo, fn ->
+      claim_opts = %{
+        correlation_id: "codex-request:" <> Ecto.UUID.generate(),
+        endpoint: "/backend-api/codex/responses"
+      }
+
+      {:ok, %{request: queued}} =
+        Accounting.claim_websocket_turn(setup.auth, setup.model, claim_opts)
+
+      assert {:error, %{code: :duplicate_request}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, claim_opts)
+
+      {:ok, %{request: denied}} =
+        Accounting.record_denied_request(
+          setup.auth,
+          setup.model,
+          Map.merge(claim_opts, %{
+            turn_claim: queued,
+            transport: "websocket",
+            last_error_code: "session_busy",
+            response_status_code: 503
+          })
+        )
+
+      assert denied.status == "rejected"
+      assert denied.correlation_id == "unstarted-request:" <> queued.id
+      assert Repo.get!(RequestLogFact, queued.id)
+
+      assert {:ok, %{request: retried}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, claim_opts)
+
+      assert retried.id != queued.id
+      assert retried.correlation_id == claim_opts.correlation_id
+    end)
+  end
+
+  test "timeout cannot retire an accepted snapshot after reservation starts" do
+    {setup, session} = fixture()
+
+    Sandbox.unboxed_run(Repo, fn ->
+      opts = %{
+        correlation_id: Ecto.UUID.generate(),
+        requested_model: setup.model.exposed_model_id,
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket"
+      }
+
+      {:ok, %{request: claim}} = Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+
+      {:ok, reserved} =
+        Accounting.reserve(setup.auth, setup.model, %{}, Map.put(opts, :turn_claim, claim))
+
+      {:ok, turn} = Websocket.start_codex_turn(session, reserved.request)
+      request = Repo.reload!(reserved.request)
+      ledger = Repo.all(from e in LedgerEntry, where: e.request_id == ^request.id)
+
+      assert {:error, %{code: :request_already_finalized}} =
+               Accounting.record_denied_request(
+                 setup.auth,
+                 setup.model,
+                 Map.merge(opts, %{
+                   turn_claim: claim,
+                   last_error_code: "session_busy",
+                   response_status_code: 503
+                 })
+               )
+
+      assert Repo.reload!(request) == request
+      assert Repo.reload!(turn) == turn
+      assert Repo.all(from e in LedgerEntry, where: e.request_id == ^request.id) == ledger
+
+      assert {:error, %{code: :duplicate_request}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
+    end)
+  end
 end

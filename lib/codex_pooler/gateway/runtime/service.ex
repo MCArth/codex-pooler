@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases, as: SessionAliases
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle
   alias CodexPooler.Gateway.Routing.BridgeRing
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -1833,16 +1834,41 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       end
 
     with {:ok, request_options} <- hold_result do
-      transact_reserved_turn(
-        auth,
-        model,
-        payload,
-        endpoint,
-        request_options,
-        route_state,
-        turn_claim,
-        authorized_correlation_id
-      )
+      result =
+        await_reserved_turn(
+          fn ->
+            transact_reserved_turn(
+              auth,
+              model,
+              payload,
+              endpoint,
+              request_options,
+              route_state,
+              turn_claim,
+              authorized_correlation_id
+            )
+          end,
+          System.monotonic_time(:millisecond) + 60_000
+        )
+
+      if match?({:error, _}, result), do: cancel_compaction_retry_hold(request_options)
+      result
+    end
+  end
+
+  defp await_reserved_turn(reserve, deadline) do
+    case reserve.() do
+      {:error, :semantic_turn_busy} ->
+        if System.monotonic_time(:millisecond) < deadline do
+          # The reservation transaction has rolled back; no locks or connection survive this wait.
+          Process.sleep(100)
+          await_reserved_turn(reserve, deadline)
+        else
+          {:error, error(503, "session_busy", "another request for this turn is still active")}
+        end
+
+      result ->
+        result
     end
   end
 
@@ -1860,6 +1886,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
     Repo.transaction(fn ->
       request_options = lock_codex_session_before_reservation(request_options)
+      if turn_claim, do: TurnLifecycle.ensure_turn_available!(request_options)
 
       with {:ok, reserved} <-
              reserve(
@@ -1899,6 +1926,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           nil ->
             {:ok, reserved}
         end
+
+      {:error, :semantic_turn_busy} = busy ->
+        busy
 
       {:error, reason} ->
         cancel_compaction_retry_hold(request_options)

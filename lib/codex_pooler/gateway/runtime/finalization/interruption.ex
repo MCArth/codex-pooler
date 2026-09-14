@@ -56,7 +56,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       session = codex_session_for_update(receipt.session_id)
       _key = Repo.one(from k in APIKey, where: k.id == ^receipt.api_key_id, lock: "FOR UPDATE")
 
-      _turn =
+      turn =
         Repo.one(
           from t in CodexTurn,
             where:
@@ -68,7 +68,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       if direct_receipt_matches?(session, request, receipt) and
            request.status in ["accepted", "in_progress"] and
-           not replacement_turn_active?(receipt.session_id, receipt.request_id) and
+           (unstarted_claim?(request, turn) or
+              not replacement_turn_active?(receipt.session_id, receipt.request_id)) and
            pre_attempt_owner_receipt_matches?(session, request, receipt) do
         request = mark_pre_attempt_owner_drain(request, receipt, reason)
         interrupt_direct_locked(session, request, reason)
@@ -79,6 +80,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       {:error, error} -> {:error, error}
     end
   end
+
+  defp unstarted_claim?(%Request{status: "accepted", id: id}, nil),
+    do: is_nil(latest_attempt_for_update(id))
+
+  defp unstarted_claim?(_request, _turn), do: false
 
   defp direct_receipt_matches?(%CodexSession{} = session, %Request{} = request, receipt),
     do:

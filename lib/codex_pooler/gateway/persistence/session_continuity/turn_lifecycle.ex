@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     Repo.transaction(fn ->
       {locked_session, now} = lock_turn_owner!(session, request_options)
 
+      ensure_semantic_turn_available!(locked_session, turn_opts)
       turn = insert_next_codex_turn!(locked_session, request, turn_opts, now)
 
       case Map.get(turn_opts, :pool_upstream_assignment_id) do
@@ -69,6 +70,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   def lock_codex_session_for_turn(%CodexSession{id: session_id}) do
     codex_session_for_update!(session_id)
   end
+
+  @doc false
+  @spec ensure_turn_available!(RequestOptions.t()) :: :ok
+  def ensure_turn_available!(
+        %RequestOptions{continuity: %{codex_session: %CodexSession{} = session}} = opts
+      ) do
+    ensure_semantic_turn_available!(session, turn_opts(opts))
+    :ok
+  end
+
+  def ensure_turn_available!(%RequestOptions{}), do: :ok
 
   @spec complete_codex_turn(
           {:ok, %{required(:request) => Request.t(), optional(:attempt) => Attempt.t() | nil}}
@@ -506,6 +518,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     %{columns: columns, rows: [row]} = SQL.query!(Repo, query, params)
     Repo.load(CodexTurn, {columns, row})
   end
+
+  defp ensure_semantic_turn_available!(session, %{semantic_turn_digest: digest}) do
+    if Repo.exists?(
+         from turn in CodexTurn,
+           where:
+             turn.codex_session_id == ^session.id and turn.semantic_turn_digest == ^digest and
+               turn.status == ^@turn_in_progress
+       ) do
+      Repo.rollback(:semantic_turn_busy)
+    end
+  end
+
+  defp ensure_semantic_turn_available!(_session, _opts), do: :ok
 
   defp turn_opts(%RequestOptions{continuity: continuity, file_bridge: file_bridge}) do
     %{

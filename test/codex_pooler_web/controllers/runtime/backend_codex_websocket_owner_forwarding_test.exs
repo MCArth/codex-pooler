@@ -5256,6 +5256,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "tool-output continuation after reconnect is forwarded through the owner" do
+    assert {:ok, _, _} =
+             CodexPooler.Gateway.RequestCompression.TokenCounter.count(
+               @supported_compression_model,
+               "warmup"
+             )
+
     first_submission_ref = make_ref()
     second_submission_ref = make_ref()
 

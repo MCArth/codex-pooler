@@ -9,7 +9,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Access
 
   alias CodexPooler.Accounting.{
+    Attempt,
     ClientRetry,
+    LedgerEntry,
     Metadata,
     PricingResolution,
     Request,
@@ -19,7 +21,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Catalog.Model
-  alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Repo
 
   @usage_pending "usage_pending"
@@ -533,6 +535,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
 
     if request.status == "accepted" do
+      attrs = retire_unstarted_busy_claim(request, attrs)
+
       request
       |> Ecto.Changeset.change(Map.delete(attrs, :admitted_at))
       |> Repo.update!()
@@ -542,6 +546,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
     end
   end
+
+  defp retire_unstarted_busy_claim(request, %{last_error_code: "session_busy"} = attrs) do
+    if Repo.exists?(from t in CodexTurn, where: t.request_id == ^request.id) or
+         Repo.exists?(from a in Attempt, where: a.request_id == ^request.id) or
+         Repo.exists?(from e in LedgerEntry, where: e.request_id == ^request.id) do
+      Repo.rollback(
+        Metadata.accounting_error(:request_already_finalized, "request work already started")
+      )
+    end
+
+    Map.put(attrs, :correlation_id, "unstarted-request:" <> request.id)
+  end
+
+  defp retire_unstarted_busy_claim(_request, attrs), do: attrs
 
   defp insert_reserved_request!(context) do
     request_metadata =
