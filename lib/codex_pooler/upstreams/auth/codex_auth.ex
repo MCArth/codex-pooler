@@ -295,8 +295,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
 
     alias CodexPooler.Upstreams.Auth.CodexAuth
     alias CodexPooler.Upstreams.CloudflareCookies
+    alias CodexPooler.Upstreams.CodexClientIdentity
 
-    @browser_user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     @browser_sec_ch_ua ~S("Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99")
 
     @spec exchange_authorization_code(String.t(), String.t(), String.t()) ::
@@ -322,7 +322,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
         {"sec-fetch-dest", "empty"},
         {"sec-fetch-mode", "cors"},
         {"sec-fetch-site", "same-origin"},
-        {"user-agent", @browser_user_agent}
+        {"user-agent", CodexClientIdentity.user_agent()}
       ]
     end
 

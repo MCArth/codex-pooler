@@ -53,6 +53,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
       headers = Map.new(request.headers)
 
       assert headers["authorization"] == "Bearer #{access_token}"
+      assert headers["user-agent"] == "BloxdLocalGateway/1.0"
       assert headers["chatgpt-account-id"] == @account_id
       refute Map.has_key?(headers, "accept")
     end)

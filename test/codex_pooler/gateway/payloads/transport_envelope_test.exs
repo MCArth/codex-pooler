@@ -115,7 +115,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
       assert headers == [
                {"authorization", "Bearer upstream-token"},
-               {"user-agent", "codex_cli_rs/#{version}"},
+               {"user-agent", "BloxdLocalGateway/1.0"},
                {"originator", "codex_cli_rs"},
                {"version", version},
                {"chatgpt-account-id", "acct_test"},
@@ -253,7 +253,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
       assert headers == [
                {"authorization", "Bearer upstream-token"},
-               {"user-agent", "codex_cli_rs/#{version}"},
+               {"user-agent", "BloxdLocalGateway/1.0"},
                {"originator", "codex_cli_rs"},
                {"version", version},
                {"chatgpt-account-id", "acct_test"},

@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
   """
 
   @originator "codex_cli_rs"
+  @user_agent "BloxdLocalGateway/1.0"
   @default_client_version Application.compile_env(:codex_pooler, __MODULE__)
                           |> Keyword.fetch!(:default_client_version)
   @version_pattern ~r/\A\d+\.\d+\.\d+\z/
@@ -25,20 +26,18 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
   def originator, do: @originator
 
   @spec user_agent() :: String.t()
-  def user_agent, do: versioned_user_agent(version())
+  def user_agent, do: @user_agent
 
   @spec headers() :: [header()]
   def headers do
     version = version()
 
     [
-      {"user-agent", versioned_user_agent(version)},
+      {"user-agent", user_agent()},
       {"originator", @originator},
       {"version", version}
     ]
   end
-
-  defp versioned_user_agent(version), do: "#{@originator}/#{version}"
 
   defp configured_version do
     case Application.get_env(:codex_pooler, CodexPooler.Catalog, []) do

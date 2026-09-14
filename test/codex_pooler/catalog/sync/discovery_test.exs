@@ -83,7 +83,7 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
   defp assert_codex_client_identity_headers(headers) do
     version = CodexClientIdentity.version()
 
-    assert headers["user-agent"] == "codex_cli_rs/#{version}"
+    assert headers["user-agent"] == "BloxdLocalGateway/1.0"
     assert headers["originator"] == CodexClientIdentity.originator()
     assert headers["version"] == version
   end

@@ -67,6 +67,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                SavedResetRedemption.redeem(assignment)
 
       requests = FakeUpstream.requests(fake)
+      assert Enum.all?(requests, &(Map.new(&1.headers)["user-agent"] == "BloxdLocalGateway/1.0"))
 
       assert Enum.map(requests, &{&1.method, &1.path}) == [
                {"GET", "/backend-api/wham/rate-limit-reset-credits"},

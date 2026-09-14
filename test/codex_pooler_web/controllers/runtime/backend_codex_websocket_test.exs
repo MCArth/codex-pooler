@@ -3417,7 +3417,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert header!(captured.headers, "openai-beta") == "responses_websockets=2026-02-06"
 
     assert header!(captured.headers, "user-agent") ==
-             "codex_cli_rs/#{CodexClientIdentity.version()}"
+             "BloxdLocalGateway/1.0"
 
     assert header!(captured.headers, "originator") == CodexClientIdentity.originator()
     assert header!(captured.headers, "version") == CodexClientIdentity.version()

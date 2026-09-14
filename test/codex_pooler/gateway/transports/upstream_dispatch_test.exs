@@ -789,7 +789,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     second_headers = Map.new(second_request.headers)
     version = CodexClientIdentity.version()
 
-    assert first_headers["user-agent"] == "codex_cli_rs/#{version}"
+    assert first_headers["user-agent"] == "BloxdLocalGateway/1.0"
     assert first_headers["originator"] == CodexClientIdentity.originator()
     assert first_headers["version"] == version
 

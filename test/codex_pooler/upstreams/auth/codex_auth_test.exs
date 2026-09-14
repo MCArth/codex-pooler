@@ -715,7 +715,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     assert headers["sec-fetch-site"] == "same-origin"
 
     assert headers["user-agent"] ==
-             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+             "BloxdLocalGateway/1.0"
   end
 
   defp start_provider!(routes) do

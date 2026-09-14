@@ -178,7 +178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
              upstream_assignment.identity.chatgpt_account_id
 
     assert header!(create_request.headers, "user-agent") ==
-             "codex_cli_rs/#{CodexClientIdentity.version()}"
+             "BloxdLocalGateway/1.0"
 
     assert header!(create_request.headers, "originator") == CodexClientIdentity.originator()
     assert header!(create_request.headers, "version") == CodexClientIdentity.version()

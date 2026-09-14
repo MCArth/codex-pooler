@@ -7,6 +7,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   alias CodexPooler.Quotas.Evidence.Descriptors
   alias CodexPooler.Upstreams.Auth.{AccessTokenExpiry, TokenRefresh, TokenRefreshMetadata}
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota
@@ -915,7 +916,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp account_window?(_window), do: false
 
   defp usage_headers(access_token, chatgpt_account_id) do
-    headers = [{"authorization", "Bearer " <> String.trim(access_token)}]
+    headers = [
+      {"authorization", "Bearer " <> String.trim(access_token)},
+      {"user-agent", CodexClientIdentity.user_agent()}
+    ]
 
     if send_chatgpt_account_header?(chatgpt_account_id) do
       headers ++

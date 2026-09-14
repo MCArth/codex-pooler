@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
@@ -2540,6 +2541,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp request_headers(access_token, chatgpt_account_id, request_kind) do
     headers = [
       {"authorization", "Bearer " <> String.trim(access_token)},
+      {"user-agent", CodexClientIdentity.user_agent()},
       {"accept", "application/json"}
     ]
 

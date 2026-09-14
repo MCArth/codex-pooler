@@ -23,10 +23,10 @@ defmodule CodexPooler.Upstreams.CodexClientIdentityTest do
 
     assert managed_version =~ ~r/\A\d+\.\d+\.\d+\z/
     assert CodexClientIdentity.version() == managed_version
-    assert CodexClientIdentity.user_agent() == "codex_cli_rs/#{managed_version}"
+    assert CodexClientIdentity.user_agent() == "BloxdLocalGateway/1.0"
 
     assert CodexClientIdentity.headers() == [
-             {"user-agent", "codex_cli_rs/#{managed_version}"},
+             {"user-agent", "BloxdLocalGateway/1.0"},
              {"originator", "codex_cli_rs"},
              {"version", managed_version}
            ]
@@ -44,23 +44,23 @@ defmodule CodexPooler.Upstreams.CodexClientIdentityTest do
       Application.put_env(:codex_pooler, CodexPooler.Catalog, codex_client_version: version)
 
       assert CodexClientIdentity.version() == managed_version
-      assert CodexClientIdentity.user_agent() == "codex_cli_rs/#{managed_version}"
+      assert CodexClientIdentity.user_agent() == "BloxdLocalGateway/1.0"
 
       assert CodexClientIdentity.headers() == [
-               {"user-agent", "codex_cli_rs/#{managed_version}"},
+               {"user-agent", "BloxdLocalGateway/1.0"},
                {"originator", "codex_cli_rs"},
                {"version", managed_version}
              ]
     end
   end
 
-  test "uses one configured version for User-Agent and trusted identity headers" do
+  test "keeps the gateway User-Agent independent of the protocol version" do
     Application.put_env(:codex_pooler, CodexPooler.Catalog, codex_client_version: "9.8.7")
 
-    assert CodexClientIdentity.user_agent() == "codex_cli_rs/9.8.7"
+    assert CodexClientIdentity.user_agent() == "BloxdLocalGateway/1.0"
 
     assert CodexClientIdentity.headers() == [
-             {"user-agent", "codex_cli_rs/9.8.7"},
+             {"user-agent", "BloxdLocalGateway/1.0"},
              {"originator", "codex_cli_rs"},
              {"version", "9.8.7"}
            ]

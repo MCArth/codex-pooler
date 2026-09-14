@@ -15008,7 +15008,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["accept"] in ["application/json", "text/event-stream"]
     assert captured_headers["content-type"] == "application/json"
-    assert captured_headers["user-agent"] == "codex_cli_rs/#{codex_version}"
+    assert captured_headers["user-agent"] == "BloxdLocalGateway/1.0"
     assert captured_headers["originator"] == CodexClientIdentity.originator()
     assert captured_headers["version"] == codex_version
 
