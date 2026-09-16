@@ -1,0 +1,35 @@
+lib/codex_pooler/gateway/routing/session_continuity.ex
+  s_32c18402abbc20::t_c7c439ca11f07a 525-526,537,539,544-547
+lib/codex_pooler/upstreams/auth/codex_auth.ex
+  s_32c18402abbc20::t_5304e571bb1e0b 481-491
+lib/codex_pooler/upstreams/auth/token_refresh.ex
+  s_c90424bdc1173f::t_a2f5ebc12900a2 290-292,737-739
+test/codex_pooler/gateway/routing/session_continuity_test.exs
+  s_32c18402abbc20::t_f16b919c6637c8 155-171
+test/codex_pooler/upstreams/auth/token_refresh_test.exs
+  s_32c18402abbc20::t_7d92f20ceeed81 968-1013
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0eac3d6cbbec92cd446f4db4ded816d320481c84",
+  "prompts": {},
+  "sessions": {
+    "s_32c18402abbc20": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a950-0d4e-7f92-bb49-2daf2e0b2fd9",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Arthur <mcarth99@gmail.com>"
+    },
+    "s_c90424bdc1173f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a8fe-d3a1-74b2-8b25-2b7ee7ea6b5a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Arthur <mcarth99@gmail.com>"
+    }
+  }
+}
