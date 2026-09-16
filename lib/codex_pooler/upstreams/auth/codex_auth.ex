@@ -478,6 +478,17 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
       end
     end
 
+    defp refresh_error(%{"error" => %{"code" => "refresh_token_invalidated"}}, status),
+      do: refresh_error(%{"error" => "refresh_token_invalidated"}, status)
+
+    defp refresh_error(%{"error" => "refresh_token_invalidated"}, _status),
+      do:
+        auth_error(
+          :codex_refresh_token_invalidated,
+          "Codex session has ended; sign in again",
+          401
+        )
+
     defp refresh_error(%{} = body, _status) do
       if refresh_token_reauth_error?(body) do
         auth_error(

@@ -965,6 +965,52 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       end
     end
 
+    test "invalidated sessions require sign-in and stop retrying without exposing provider data" do
+      for error <- [
+            "refresh_token_invalidated",
+            %{
+              "code" => "refresh_token_invalidated",
+              "message" => "Your session has ended. Please log in again.",
+              "param" => nil,
+              "type" => "invalid_request_error"
+            }
+          ] do
+        refresh_token = secret("refresh", "invalidated")
+
+        upstream =
+          start_path_upstream(%{
+            "/oauth/token" =>
+              {401, %{"error" => error, "private_context" => "provider-private-data"}}
+          })
+
+        identity = identity_with_refresh_token!("refresh_failed", upstream, refresh_token)
+        assignment = active_assignment_for_identity!(identity)
+
+        assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+                 TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+        persisted = Repo.get!(UpstreamIdentity, identity.id)
+        assert persisted.status == "reauth_required"
+
+        assert persisted.metadata["token_refresh"]["reason"] == %{
+                 "code" => "refresh_token_invalidated",
+                 "message" => "session has ended; sign in again"
+               }
+
+        cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+        assert cascaded.health_status == "disabled"
+        assert cascaded.eligibility_status == "ineligible"
+
+        assert {:ok, %{status: :noop, retryable?: false}} =
+                 TokenRefresh.refresh_access_token(persisted)
+
+        assert FakeUpstream.count(upstream) == 1
+        refute inspect(result) =~ refresh_token
+        refute inspect(result) =~ "provider-private-data"
+        refute inspect(persisted.metadata) =~ "Your session has ended."
+      end
+    end
+
     test "refresh token error descriptions mark the account reauth_required without retrying" do
       refresh_token = secret("refresh", "revoked-description")
 

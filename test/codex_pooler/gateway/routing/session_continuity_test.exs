@@ -152,6 +152,23 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
              }
     end
 
+    test "invalidated pinned sessions require reauthentication and preserve their reason" do
+      setup = pinned_assignment_setup(token_refresh_reason_code: "refresh_token_invalidated")
+      session = codex_session_fixture(setup, setup.pinned.assignment)
+      opts = request_options_with_session(session)
+
+      assert {:error, error} =
+               SessionContinuity.filter_codex_session_assignment([setup.other_candidate], opts)
+
+      assert error.code == "pinned_continuation_reauth_required"
+      assert error.retryable == false
+      assert error.requires_new_upstream_session == true
+      assert error.recovery["kind"] == "restart_with_full_context"
+
+      assert error.continuity_denial["token_refresh_reason_code_preview"] ==
+               "refresh_token_invalidated"
+    end
+
     test "loads persisted assignment state rather than trusting only the eligible candidate set" do
       setup = pinned_assignment_setup()
       session = codex_session_fixture(setup, setup.pinned.assignment)

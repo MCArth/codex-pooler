@@ -522,8 +522,8 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
              select: {assignment, identity}
          ) do
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->
-        if revoked_refresh_token_pinned_reauth?(assignment, identity) do
-          {:ok, assignment, identity, "refresh_token_revoked"}
+        if terminal_refresh_token_pinned_reauth?(assignment, identity) do
+          {:ok, assignment, identity, token_refresh_reason_code(identity.metadata)}
         else
           {:unavailable, assignment, identity,
            pinned_unavailable_internal_reason(assignment, identity)}
@@ -534,14 +534,17 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
-  @spec revoked_refresh_token_pinned_reauth?(PoolUpstreamAssignment.t(), UpstreamIdentity.t()) ::
+  @spec terminal_refresh_token_pinned_reauth?(PoolUpstreamAssignment.t(), UpstreamIdentity.t()) ::
           boolean()
-  defp revoked_refresh_token_pinned_reauth?(assignment, identity) do
+  defp terminal_refresh_token_pinned_reauth?(assignment, identity) do
     assignment.status == PoolUpstreamAssignment.active_status() and
       assignment.health_status == PoolUpstreamAssignment.disabled_health_status() and
       assignment.eligibility_status == PoolUpstreamAssignment.ineligible_status() and
       identity.status == UpstreamIdentity.reauth_required_status() and
-      token_refresh_reason_code(identity.metadata) == "refresh_token_revoked"
+      token_refresh_reason_code(identity.metadata) in [
+        "refresh_token_revoked",
+        "refresh_token_invalidated"
+      ]
   end
 
   @spec token_refresh_reason_code(term()) :: String.t() | nil

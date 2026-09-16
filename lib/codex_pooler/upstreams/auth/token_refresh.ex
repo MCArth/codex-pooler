@@ -287,6 +287,9 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
       {:error, %{code: :codex_refresh_token_revoked}} ->
         {:reauth_required, "refresh_token_revoked"}
 
+      {:error, %{code: :codex_refresh_token_invalidated}} ->
+        {:reauth_required, "refresh_token_invalidated"}
+
       {:error, %{code: code}} ->
         {:transient_error, to_string(code)}
 
@@ -730,6 +733,9 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
 
   defp token_refresh_message("missing_refresh_token"), do: "refresh token is missing"
   defp token_refresh_message("refresh_token_revoked"), do: "refresh token was revoked"
+
+  defp token_refresh_message("refresh_token_invalidated"),
+    do: "session has ended; sign in again"
 
   defp token_refresh_message("invalid_refresh_response"),
     do: "upstream returned an invalid refresh response"
