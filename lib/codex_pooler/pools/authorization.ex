@@ -157,7 +157,7 @@ defmodule CodexPooler.Pools.Authorization do
       not role_can?(@role_instance_owner, capability) ->
         denied_for_role()
 
-      not active_pool?(pool_id) ->
+      not Repo.exists?(from pool in Pool, where: pool.id == ^pool_id) ->
         {:error, access_error(:pool_not_found, "pool was not found")}
 
       true ->

@@ -127,6 +127,6 @@ defmodule CodexPooler.Access.APIKeys.Assignment do
   defp binding_attrs(nil, "default"), do: %{}
 
   defp normalize_pool(%Pool{} = pool), do: pool
-  defp normalize_pool(id) when is_binary(id), do: Pools.get_active_pool(id)
+  defp normalize_pool(id) when is_binary(id), do: Pools.get_pool(id)
   defp normalize_pool(_pool_or_id), do: nil
 end

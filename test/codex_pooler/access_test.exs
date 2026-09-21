@@ -290,8 +290,13 @@ defmodule CodexPooler.AccessTest do
 
       assert {:ok, _pool} = Pools.update_pool(scope, pool, %{status: "disabled"})
 
-      assert {:error, %{code: :api_key_missing}} = Access.authenticate_api_key(raw_key)
-      assert {:error, %{code: :api_key_missing}} = Access.authenticate_v1_api_key(raw_key)
+      assert {:error, %{code: :pool_inactive}} = Access.authenticate_api_key(raw_key)
+      assert {:error, %{code: :pool_inactive}} = Access.authenticate_v1_api_key(raw_key)
+
+      assert {:error, %{code: :api_key_missing}} = Access.authenticate_api_key(raw_key <> "wrong")
+
+      assert {:error, %{code: :api_key_missing}} =
+               Access.authenticate_v1_api_key(raw_key <> "wrong")
     end
   end
 

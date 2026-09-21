@@ -26,7 +26,7 @@ defmodule CodexPooler.Access.APIKeys.Authentication do
          %APIKey{} = api_key <- Repo.get_by(APIKey, key_prefix: key_prefix),
          :ok <- Material.verify(api_key.key_hash, secret),
          :ok <- ensure_api_key_usable(api_key),
-         %Pool{} = pool <- Pools.get_active_pool(api_key.pool_id) do
+         {:ok, pool} <- active_pool(api_key.pool_id) do
       {:ok, auth_context(touch_api_key!(api_key), pool)}
     else
       nil ->
@@ -70,7 +70,7 @@ defmodule CodexPooler.Access.APIKeys.Authentication do
          %APIKey{} = api_key <- Repo.get_by(APIKey, key_prefix: key_prefix),
          :ok <- Material.verify(api_key.key_hash, secret),
          :ok <- ensure_v1_api_key_usable(api_key),
-         %Pool{} = pool <- Pools.get_active_pool(api_key.pool_id) do
+         {:ok, pool} <- active_pool(api_key.pool_id) do
       {:ok, auth_context(touch_api_key!(api_key), pool)}
     else
       nil ->
@@ -107,6 +107,20 @@ defmodule CodexPooler.Access.APIKeys.Authentication do
   end
 
   defp touch_api_key!(%APIKey{} = api_key), do: TouchDebounce.touch(api_key, now())
+
+  defp active_pool(pool_id) do
+    case Pools.get_active_pool(pool_id) do
+      %Pool{} = pool ->
+        {:ok, pool}
+
+      nil ->
+        {:error,
+         Errors.access_error(
+           :pool_inactive,
+           "the API key's pool is disabled or archived; re-enable it or move the key to an active pool"
+         )}
+    end
+  end
 
   defp ensure_api_key_usable(%APIKey{status: @status_revoked}),
     do: {:error, Errors.access_error(:api_key_revoked, "api key is revoked")}

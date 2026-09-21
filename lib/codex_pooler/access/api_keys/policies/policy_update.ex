@@ -217,7 +217,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
   defp api_key_from_result({:ok, %{api_key: %APIKey{} = api_key}}), do: api_key
 
   defp normalize_pool(%Pool{} = pool), do: pool
-  defp normalize_pool(id) when is_binary(id), do: Pools.get_active_pool(id)
+  defp normalize_pool(id) when is_binary(id), do: Pools.get_pool(id)
   defp normalize_pool(_pool_or_id), do: nil
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)

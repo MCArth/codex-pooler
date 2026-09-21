@@ -16,6 +16,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
   setup :register_and_log_in_user
 
+  test "new keys default to an active pool ahead of an older disabled pool", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, old_pool} = Pools.create_pool(scope, %{slug: "old-disabled", name: "Old Pool"})
+    {:ok, _} = Pools.change_pool_status(scope, old_pool, "disabled")
+    {:ok, active_pool} = Pools.create_pool(scope, %{slug: "new-active", name: "New Pool"})
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    view |> element("#api-key-page-create-action") |> render_click()
+    assert has_element?(view, "#api_key_pool_id option[selected][value='#{active_pool.id}']")
+
+    assert has_element?(
+             view,
+             "#api_key_pool_id option[value='#{old_pool.id}']",
+             "Old Pool (disabled)"
+           )
+  end
+
   test "guides operators to create a Pool before API keys", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
 
@@ -320,15 +338,26 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert has_element?(view, "#api-key-pool-group-filtered-backup", "Filtered Backup")
     assert has_element?(view, "#api-key-row-#{primary_key.id}", "Filtered primary key")
     assert has_element?(view, "#api-key-row-#{backup_key.id}", "Filtered backup key")
-    refute has_element?(view, "#api-key-row-#{disabled_key.id}")
+    assert has_element?(view, "#api-key-row-#{disabled_key.id}")
+    assert has_element?(view, "#api-key-pool-group-filtered-disabled", "Filtered Disabled")
 
     {:ok, disabled_filter_view, _html} =
       live(conn, ~p"/admin/api-keys?pool_id=#{disabled_pool.id}")
 
-    refute has_element?(disabled_filter_view, "#api-key-active-pool-filter")
-    assert has_element?(disabled_filter_view, "#api-key-row-#{primary_key.id}")
-    assert has_element?(disabled_filter_view, "#api-key-row-#{backup_key.id}")
-    refute has_element?(disabled_filter_view, "#api-key-row-#{disabled_key.id}")
+    assert has_element?(disabled_filter_view, "#api-key-active-pool-filter", "Filtered Disabled")
+    refute has_element?(disabled_filter_view, "#api-key-row-#{primary_key.id}")
+    refute has_element?(disabled_filter_view, "#api-key-row-#{backup_key.id}")
+    assert has_element?(disabled_filter_view, "#api-key-row-#{disabled_key.id}")
+
+    disabled_filter_view |> element("#edit-api-key-#{disabled_key.id}") |> render_click()
+
+    assert has_element?(
+             disabled_filter_view,
+             "#api_key_pool_id option[selected][value='#{disabled_pool.id}']"
+           )
+
+    disabled_filter_view |> element("#api-key-form") |> render_submit()
+    assert Repo.get!(APIKey, disabled_key.id).pool_id == disabled_pool.id
 
     html = render(disabled_filter_view)
     refute html =~ primary_raw_key
@@ -468,10 +497,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "event-scope", name: "Event Scope Pool"})
 
-    {:ok, invisible_pool} =
+    {:ok, disabled_pool} =
       Pools.create_pool(scope, %{slug: "event-hidden", name: "Event Hidden Pool"})
 
-    assert {:ok, _invisible_pool} = Pools.change_pool_status(scope, invisible_pool, "disabled")
+    assert {:ok, _disabled_pool} = Pools.change_pool_status(scope, disabled_pool, "disabled")
 
     {:ok, %{api_key: api_key}} =
       Access.create_api_key(scope, pool, %{display_name: "Event scope key"})
@@ -506,13 +535,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert has_element?(view, "#api-key-tab-review[aria-selected='true']")
     assert has_element?(view, "#api_key_display_name[value='#{draft_name}']")
 
-    {_result, invisible_queries} =
+    {_result, disabled_pool_queries} =
       capture_repo_queries(view.pid, fn ->
-        assert {:ok, _event} = Events.broadcast_pools(invisible_pool.id, "pool_changed")
+        assert {:ok, _event} = Events.broadcast_pools(disabled_pool.id, "pool_changed")
         _ = :sys.get_state(view.pid)
       end)
 
-    assert invisible_queries == []
+    assert length(disabled_pool_queries) == 10
+    assert_no_ledger_reads(disabled_pool_queries)
 
     for malformed_topics <- [[%{}], ["pools", %{}], ["pools", 123], ["pools", "unknown"]] do
       {_result, malformed_queries} =

@@ -31,7 +31,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   @spec empty_params([Pool.t()]) :: params()
   def empty_params([]), do: default_params(%{"pool_id" => ""})
-  def empty_params([pool | _pools]), do: default_params(%{"pool_id" => pool.id})
+
+  def empty_params([first_pool | _] = pools) do
+    pool = Enum.find(pools, first_pool, &(&1.status == "active"))
+    default_params(%{"pool_id" => pool.id})
+  end
 
   @spec params_for(APIKey.t(), [APIKeyPolicyBinding.t()]) :: params()
   def params_for(%APIKey{} = api_key, policy_bindings) do

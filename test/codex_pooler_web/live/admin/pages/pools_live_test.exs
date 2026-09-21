@@ -2580,6 +2580,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-status", "disabled")
     refute has_element?(view, "#pool-row-#{pool.id}", "editable-pool")
     _ = await_pool_traffic(view)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    view
+    |> element("#pool-edit-form")
+    |> render_submit(%{
+      "pool_edit" => %{"id" => pool.id, "name" => "Renamed Pool", "status" => "active"}
+    })
+
+    assert Repo.get!(Pool, pool.id).status == "active"
+    assert has_element?(view, "#pool-row-#{pool.id}-status", "active")
+    _ = await_pool_traffic(view)
   end
 
   test "keeps Models last in the edit wizard while Create stays four tabs", %{

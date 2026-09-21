@@ -22,12 +22,7 @@ defmodule CodexPooler.Access.APIKeys.Queries do
 
   @spec list_api_keys(Scope.t()) :: {:ok, [APIKey.t()]} | {:error, access_error()}
   def list_api_keys(%Scope{} = scope) do
-    with {:ok, pools} <-
-           PoolAuthorization.list_pools_for_capability(
-             scope,
-             PoolAuthorization.capability(:pool_api_key_manage),
-             ["active"]
-           ) do
+    with {:ok, pools} <- Pools.list_pools_for_management(scope) do
       {:ok, list_api_keys_for_authorized_pools(pools)}
     end
   end
@@ -200,6 +195,6 @@ defmodule CodexPooler.Access.APIKeys.Queries do
        do: :always_use
 
   defp normalize_pool(%Pool{} = pool), do: pool
-  defp normalize_pool(id) when is_binary(id), do: Pools.get_active_pool(id)
+  defp normalize_pool(id) when is_binary(id), do: Pools.get_pool(id)
   defp normalize_pool(_pool_or_id), do: nil
 end

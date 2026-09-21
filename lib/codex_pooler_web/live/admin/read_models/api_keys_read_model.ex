@@ -61,7 +61,18 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
   @spec load(term(), map()) :: page_state()
   def load(scope, params) do
-    pools = Pools.list_visible_pools(scope)
+    {pools, pool_warnings} =
+      case Pools.list_pools_for_management(scope) do
+        {:ok, pools} ->
+          {pools, []}
+
+        {:error, reason} ->
+          empty_admin_options(:pools, reason, %{
+            title: "Pools unavailable",
+            message: "Pool options could not be loaded."
+          })
+      end
+
     pool_lookup = Map.new(pools, &{&1.id, &1})
     selected_pool = selected_pool(pools, Map.get(params, "pool_id"))
     model_policy_filter = normalize_model_policy_filter(Map.get(params, "model_policy"))
@@ -93,7 +104,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       pool_options: pool_options(pools),
       model_policy_filter: model_policy_filter,
       unavailable_model_policy_count: unavailable_model_policy_count,
-      data_load_warnings: data_load_warnings
+      data_load_warnings: pool_warnings ++ data_load_warnings
     }
   end
 
@@ -139,10 +150,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   end
 
   @spec pool_options([Pool.t()]) :: [option()]
-  def pool_options([]), do: [{"No active Pools available", ""}]
+  def pool_options([]), do: [{"No Pools available", ""}]
 
   def pool_options(pools) do
-    Enum.map(pools, &{&1.name, &1.id})
+    Enum.map(pools, fn pool ->
+      label = if pool.status == "active", do: pool.name, else: "#{pool.name} (#{pool.status})"
+      {label, pool.id}
+    end)
   end
 
   @api_key_status_rank %{"active" => 0, "paused" => 1, "revoked" => 2}
