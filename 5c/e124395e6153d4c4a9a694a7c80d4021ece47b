@@ -1,0 +1,36 @@
+lib/codex_pooler/access/api_keys.ex
+  h_817a37042bec11 888
+lib/codex_pooler/access/api_keys/credentials/authentication.ex
+  h_817a37042bec11 29,73,111-124
+lib/codex_pooler/access/api_keys/lifecycle/assignment.ex
+  h_817a37042bec11 130
+lib/codex_pooler/access/api_keys/policies/policy_update.ex
+  h_817a37042bec11 220
+lib/codex_pooler/access/api_keys/queries/queries.ex
+  h_817a37042bec11 25,198
+lib/codex_pooler/pools/authorization.ex
+  h_817a37042bec11 160
+lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex
+  h_817a37042bec11 34-38
+lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex
+  h_817a37042bec11 64-75,107,153,156-159
+test/codex_pooler/access_test.exs
+  h_817a37042bec11 293-299
+test/codex_pooler/admin/pool_recovery_test.exs
+  h_817a37042bec11 1-130
+test/codex_pooler_web/live/admin/pages/api_keys_live_test.exs
+  h_817a37042bec11 19-36,341-342,347-360,500,503,538,540,544-545
+test/codex_pooler_web/live/admin/pages/pools_live_test.exs
+  h_817a37042bec11 2583-2594
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5+threadwell.capture.2",
+  "base_commit_sha": "5ce124395e6153d4c4a9a694a7c80d4021ece47b",
+  "prompts": {},
+  "humans": {
+    "h_817a37042bec11": {
+      "author": "Arthur <mcarth99@gmail.com>"
+    }
+  }
+}
