@@ -5,6 +5,7 @@ defmodule CodexPooler.Catalog.Sync do
 
   import Ecto.Query
 
+  alias CodexPooler.Catalog.ClientVersion
   alias CodexPooler.Catalog.Sync.{Discovery, Persistence}
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
@@ -40,7 +41,8 @@ defmodule CodexPooler.Catalog.Sync do
 
   def sync_pool_catalog(pool_id, opts) when is_binary(pool_id) do
     trigger_kind = Keyword.get(opts, :trigger_kind, "manual")
-    fetcher = Keyword.get(opts, :fetcher, &Discovery.fetch_models_for_assignment/1)
+
+    fetcher = Keyword.get(opts, :fetcher)
 
     assignments = list_catalog_sync_assignments(pool_id)
 
@@ -134,9 +136,27 @@ defmodule CodexPooler.Catalog.Sync do
     started_at = now()
     {:ok, _summary} = cleanup_stale_sync_runs(started_at)
 
-    with :ok <- ensure_no_running_sync(pool_id, trigger_kind, started_at),
-         {:ok, run} <- create_sync_run(pool_id, trigger_kind, started_at) do
-      discover_and_persist_catalog(run, assignments, fetcher)
+    with {:ok, run} <- prepare_sync_run(pool_id, trigger_kind, started_at) do
+      discover_and_persist_catalog(run, assignments, fetcher || default_fetcher(pool_id))
+    end
+  end
+
+  defp default_fetcher(pool_id) do
+    version = Pool |> Repo.get!(pool_id) |> ClientVersion.for_pool()
+    &Discovery.fetch_models_for_assignment(&1, version)
+  end
+
+  defp prepare_sync_run(pool_id, trigger_kind, started_at) do
+    Repo.transaction(fn ->
+      Repo.one!(from pool in Pool, where: pool.id == ^pool_id, lock: "FOR UPDATE")
+
+      with :ok <- ensure_no_running_sync(pool_id, trigger_kind, started_at) do
+        create_sync_run(pool_id, trigger_kind, started_at)
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
     end
   end
 

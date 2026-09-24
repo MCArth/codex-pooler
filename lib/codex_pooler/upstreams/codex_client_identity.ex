@@ -30,13 +30,38 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
 
   @spec headers() :: [header()]
   def headers do
-    version = version()
+    headers(version())
+  end
 
+  @spec headers(String.t()) :: [header()]
+  def headers(version) do
     [
       {"user-agent", user_agent()},
       {"originator", @originator},
       {"version", version}
     ]
+  end
+
+  @spec normalise_version(term()) :: String.t() | nil
+  def normalise_version(value) when is_binary(value) and byte_size(value) <= 80 do
+    case Version.parse(value) do
+      {:ok, %{major: major, minor: minor, patch: patch}}
+      when major <= 32_767 and minor <= 32_767 and patch <= 32_767 ->
+        "#{major}.#{minor}.#{patch}"
+
+      _invalid ->
+        nil
+    end
+  end
+
+  def normalise_version(_value), do: nil
+
+  @spec newest_version(term()) :: String.t()
+  def newest_version(candidate) do
+    case normalise_version(candidate) do
+      nil -> version()
+      valid -> if Version.compare(valid, version()) == :gt, do: valid, else: version()
+    end
   end
 
   defp configured_version do

@@ -79,7 +79,15 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
 
   defp codex_identity_headers(opts) do
     if Keyword.get(opts, :include_codex_identity?, false) do
-      CodexClientIdentity.headers()
+      version = opts |> Keyword.get(:forwarded_headers, []) |> List.keyfind("version", 0)
+
+      candidate =
+        case version do
+          {"version", value} -> value
+          nil -> nil
+        end
+
+      CodexClientIdentity.headers(CodexClientIdentity.newest_version(candidate))
     else
       []
     end

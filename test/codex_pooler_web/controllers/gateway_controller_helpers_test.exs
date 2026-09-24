@@ -8,6 +8,34 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPoolerWeb.GatewayControllerHelpers
 
+  test "only authenticated clients can teach a pool a newer protocol version" do
+    setup = active_api_key_fixture()
+
+    unauthenticated =
+      Phoenix.ConnTest.build_conn(:get, "/backend-api/codex/models?client_version=1.2.3")
+
+    assert {:error, _reason} = GatewayControllerHelpers.authenticate(unauthenticated)
+
+    assert CodexPooler.Repo.get!(CodexPooler.Pools.Pool, setup.pool.id).catalog_client_version ==
+             nil
+
+    conn = put_req_header(unauthenticated, "authorization", setup.authorization)
+    assert {:ok, auth} = GatewayControllerHelpers.authenticate(conn)
+
+    assert CodexPooler.Repo.get!(CodexPooler.Pools.Pool, setup.pool.id).catalog_client_version ==
+             "1.2.3"
+
+    cached =
+      Phoenix.ConnTest.build_conn(:get, "/backend-api/codex/responses")
+      |> put_private(:runtime_api_auth, auth)
+      |> put_req_header("version", "1.3.0-alpha.9.2")
+
+    assert {:ok, _auth} = GatewayControllerHelpers.authenticate(cached)
+
+    assert CodexPooler.Repo.get!(CodexPooler.Pools.Pool, setup.pool.id).catalog_client_version ==
+             "1.3.0"
+  end
+
   test "body results do not require a headers key", %{conn: conn} do
     conn =
       GatewayControllerHelpers.send_gateway_result(conn, %{

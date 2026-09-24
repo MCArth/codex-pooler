@@ -13,6 +13,7 @@ defmodule CodexPooler.Pools.Pool do
     field :slug, :string
     field :name, :string
     field :status, :string
+    field :catalog_client_version, :string
     field :created_by_user_id, :binary_id
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec

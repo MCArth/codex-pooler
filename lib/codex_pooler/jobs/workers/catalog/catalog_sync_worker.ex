@@ -25,6 +25,7 @@ defmodule CodexPooler.Jobs.CatalogSyncWorker do
 
     case JobWorkflow.sync_catalog(pool_id, trigger_kind) do
       {:ok, _result} -> :ok
+      {:error, %{code: :catalog_sync_in_progress}} -> {:snooze, 30}
       {:error, reason} -> {:error, reason}
     end
   end
