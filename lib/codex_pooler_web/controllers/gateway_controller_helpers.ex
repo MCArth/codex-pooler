@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   require Logger
 
   alias CodexPooler.Access
+  alias CodexPooler.Catalog.ClientVersion
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.ErrorSanitizer
@@ -15,6 +16,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPooler.Upstreams.CodexClientIdentity
 
   @overload_code "server_is_overloaded"
 
@@ -38,15 +40,32 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   end
 
   @spec authenticate(conn()) :: {:ok, Access.auth_context()} | {:error, Contracts.gateway_error()}
-  def authenticate(%Plug.Conn{private: %{runtime_api_auth: auth}}), do: {:ok, auth}
+  def authenticate(%Plug.Conn{private: %{runtime_api_auth: auth}} = conn),
+    do: observe_client_version(conn, auth)
 
   def authenticate(conn) do
     case Access.authenticate_authorization_header(
            get_req_header(conn, "authorization")
            |> List.first()
          ) do
-      {:ok, auth} -> {:ok, auth}
+      {:ok, auth} -> observe_client_version(conn, auth)
       {:error, reason} -> {:error, Map.put(reason, :status, 401)}
+    end
+  end
+
+  defp observe_client_version(conn, auth) do
+    conn = fetch_query_params(conn)
+
+    version =
+      conn.query_params["client_version"] || CodexClientIdentity.client_version(conn.req_headers)
+
+    case ClientVersion.observe(auth.pool, version) do
+      :ok ->
+        {:ok, auth}
+
+      {:error, _reason} ->
+        Logger.warning("Could not persist Codex client version or enqueue catalog refresh")
+        {:ok, auth}
     end
   end
 
@@ -317,7 +336,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     provider_session_header_names = TransportEnvelope.provider_session_header_names()
 
     Enum.filter(conn.req_headers, fn {name, _value} ->
-      name == "user-agent" or String.starts_with?(name, "x-openai-") or
+      name in ["user-agent", "version"] or String.starts_with?(name, "x-openai-") or
         String.starts_with?(name, "x-codex-") or name in provider_session_header_names
     end)
   end

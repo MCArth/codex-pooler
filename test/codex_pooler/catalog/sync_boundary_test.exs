@@ -68,6 +68,9 @@ defmodule CodexPooler.Catalog.SyncBoundaryTest do
     opts = [fetcher: fn _ -> flunk("must not fetch while sync is running") end]
     assert {:error, %{code: :catalog_sync_in_progress}} = Sync.sync_pool_catalog(pool, opts)
 
+    assert {:snooze, 30} =
+             CodexPooler.Jobs.CatalogSyncWorker.perform(%Oban.Job{args: %{"pool_id" => pool.id}})
+
     assert {:error, %Ecto.Changeset{}} =
              Sync.sync_pool_catalog(pool, Keyword.put(opts, :trigger_kind, "invalid"))
   end

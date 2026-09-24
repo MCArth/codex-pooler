@@ -64,15 +64,23 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   end
 
   @spec fetch_models_for_assignment(map()) :: {:ok, [map()]} | {:error, catalog_error() | term()}
-  def fetch_models_for_assignment(%{assignment: assignment, identity: identity}) do
+  def fetch_models_for_assignment(source),
+    do: fetch_models_for_assignment(source, CodexClientIdentity.version())
+
+  @spec fetch_models_for_assignment(map(), String.t()) ::
+          {:ok, [map()]} | {:error, catalog_error() | term()}
+  def fetch_models_for_assignment(%{assignment: assignment, identity: identity}, version) do
     with {:ok, token} <-
            Secrets.decrypt_active_secret(identity, @secret_kind),
-         {:ok, url} <- model_catalog_url(identity, assignment) do
+         {:ok, url} <- model_catalog_url(identity, assignment, version) do
       case Req.get(url,
              retry: false,
              receive_timeout: 30_000,
              headers:
-               CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
+               CloudflareCookies.request_headers(
+                 url,
+                 model_catalog_headers(identity, token, version)
+               )
            )
            |> store_cloudflare_cookies(url) do
         {:ok, %{status: 200, body: %{"data" => models}}} when is_list(models) ->
@@ -102,11 +110,11 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
     result
   end
 
-  defp model_catalog_url(identity, assignment) do
+  defp model_catalog_url(identity, assignment, version) do
     case EndpointMetadata.endpoint_url(
            identity,
            assignment,
-           model_catalog_path(),
+           model_catalog_path(version),
            @default_codex_upstream_base_url
          ) do
       {:ok, url} ->
@@ -117,17 +125,17 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
     end
   end
 
-  defp model_catalog_path do
+  defp model_catalog_path(version) do
     "/backend-api/codex/models?client_version=" <>
-      URI.encode_www_form(CodexClientIdentity.version())
+      URI.encode_www_form(version)
   end
 
-  defp model_catalog_headers(identity, token) do
+  defp model_catalog_headers(identity, token, version) do
     headers =
       [
         {"authorization", "Bearer #{String.trim(token)}"},
         {"accept", "application/json"}
-      ] ++ CodexClientIdentity.headers()
+      ] ++ CodexClientIdentity.headers(version)
 
     case present_string(identity.chatgpt_account_id) do
       nil -> headers

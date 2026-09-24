@@ -433,6 +433,15 @@ account-dependent features, including mobile/app-server features, may be
 unavailable.
 
 When Codex Pooler serves current model metadata, Codex CLI and Codex Desktop
+learn about newly available models from the upstream catalog. Pooler remembers
+the newest authenticated Codex client version per Pool, including prerelease
+clients, and uses it for scheduled discovery after restarts. A newer client
+queues an immediate refresh; older clients cannot lower the stored version.
+If the first model picker still shows its cached list, reopen Codex after the
+background refresh completes. Model availability remains subject to each
+upstream account's access.
+
+When Codex Pooler serves current model metadata, Codex CLI and Codex Desktop
 derive their effective context window and automatic compaction boundary from
 that metadata. Leave context sizing automatic so the client follows per-model
 catalog changes without stale local overrides. Provider catalog rollout can be
