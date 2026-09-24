@@ -122,6 +122,31 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     end
   end
 
+  test "websocket handshake carries the newer client version" do
+    completed =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_client_version"}
+      })
+
+    {:ok, upstream} = FakeUpstream.start_link(FakeUpstream.websocket_text_frames([completed]))
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    options =
+      websocket_request_options()
+      |> RequestOptions.put_transport(
+        forwarded_metadata_headers: [{"user-agent", "Codex Desktop/1.2.3-alpha.1 (Windows)"}]
+      )
+
+    assert {:ok, _response} =
+             upstream
+             |> websocket_dispatch_request(options)
+             |> UpstreamDispatch.websocket_request()
+
+    [request] = FakeUpstream.requests(upstream)
+    assert Map.new(request.headers)["version"] == "1.2.3"
+  end
+
   @tag :collect_compaction
   test "direct collect compaction materializes a nil writer from anchored Full options regardless of output item names" do
     compact_frames = fn suffix ->

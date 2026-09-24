@@ -40,6 +40,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   # Every field an owner success reply must carry, taken from what the local
@@ -262,6 +263,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     envelope_opts =
       opts
       |> Keyword.put(:include_codex_identity?, true)
+      |> Keyword.put(:codex_client_version, codex_client_version(request_options))
       |> Keyword.put(
         :forwarded_headers,
         regular_runtime_forwarded_metadata_headers(request_options)
@@ -271,6 +273,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     headers = maybe_put_routing_hint_header(headers, Keyword.get(opts, :routing_hint))
 
     TransportEnvelope.headers(identity, token, headers, envelope_opts)
+  end
+
+  defp codex_client_version(%RequestOptions{transport: transport}) do
+    CodexClientIdentity.client_version(transport.forwarded_metadata_headers)
   end
 
   @doc false
@@ -353,9 +359,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         headers:
           CloudflareCookies.request_headers(
             url,
-            upstream_headers(identity, token, [
-              {"accept", "application/json"}
-            ])
+            TransportEnvelope.headers(identity, token, [{"accept", "application/json"}],
+              include_codex_identity?: true,
+              codex_client_version: codex_client_version(opts)
+            )
           )
       ]
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
@@ -469,7 +476,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       websocket_headers(
         identity,
         token,
-        routing_hint_header(payload_body, routing_hint_authorized?, request_options)
+        routing_hint_header(payload_body, routing_hint_authorized?, request_options),
+        request_options
       )
 
     emit_egress_observation(:websocket, headers, request_options, payload_body)
@@ -1450,14 +1458,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp multi_agent_round_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
 
-  defp websocket_headers(identity, token, routing_hint) do
-    upstream_headers(
+  defp websocket_headers(identity, token, routing_hint, request_options) do
+    TransportEnvelope.headers(
       identity,
       token,
       maybe_put_routing_hint_header(
         [{"openai-beta", "responses_websockets=2026-02-06"}],
         routing_hint
-      )
+      ),
+      include_codex_identity?: true,
+      codex_client_version: codex_client_version(request_options)
     )
   end
 
@@ -1589,10 +1599,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp safe_log_value(value) when is_binary(value), do: value
   defp safe_log_value(value) when is_integer(value), do: Integer.to_string(value)
   defp safe_log_value(_value), do: nil
-
-  defp upstream_headers(identity, token, headers) do
-    TransportEnvelope.headers(identity, token, headers, include_codex_identity?: true)
-  end
 
   defp mark_visible_output(request, attempt, {status, %{body: body} = result})
        when status in [:ok, :error] and is_binary(body) and body != "" do

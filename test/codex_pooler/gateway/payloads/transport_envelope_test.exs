@@ -242,6 +242,16 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   describe "UpstreamDispatch regular runtime headers" do
+    test "preserves a newer protocol version across runtime metadata filtering" do
+      options =
+        runtime_options("/backend-api/codex/responses",
+          forwarded_headers: [{"version", "1.2.3-alpha.1"}]
+        )
+
+      headers = UpstreamDispatch.regular_runtime_headers(identity(), "token", options, [])
+      assert List.keyfind(headers, "version", 0) == {"version", "1.2.3"}
+    end
+
     test "keeps forwarded metadata broad at construction and narrows only at runtime output" do
       options = runtime_options("/backend-api/codex/responses")
 

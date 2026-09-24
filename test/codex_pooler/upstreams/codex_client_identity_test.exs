@@ -3,6 +3,21 @@ defmodule CodexPooler.Upstreams.CodexClientIdentityTest do
 
   alias CodexPooler.Upstreams.CodexClientIdentity
 
+  test "reads protocol versions from current Codex CLI and Desktop user agents" do
+    for prefix <- ["codex_cli_rs", "codex_exec", "Codex Desktop"] do
+      assert CodexClientIdentity.client_version([
+               {"user-agent", "#{prefix}/1.2.3-alpha.9.2 (Windows)"}
+             ]) == "1.2.3"
+    end
+
+    assert CodexClientIdentity.client_version([{"user-agent", "Mozilla/5.0"}]) == nil
+
+    assert CodexClientIdentity.client_version([
+             {"version", "1.3.0"},
+             {"user-agent", "Codex Desktop/1.2.3"}
+           ]) == "1.3.0"
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, CodexPooler.Catalog)
 

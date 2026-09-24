@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPooler.Upstreams.CodexClientIdentity
 
   @overload_code "server_is_overloaded"
 
@@ -54,7 +55,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
   defp observe_client_version(conn, auth) do
     conn = fetch_query_params(conn)
-    version = conn.query_params["client_version"] || List.first(get_req_header(conn, "version"))
+
+    version =
+      conn.query_params["client_version"] || CodexClientIdentity.client_version(conn.req_headers)
 
     case ClientVersion.observe(auth.pool, version) do
       :ok ->

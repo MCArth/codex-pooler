@@ -28,7 +28,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
     cached =
       Phoenix.ConnTest.build_conn(:get, "/backend-api/codex/responses")
       |> put_private(:runtime_api_auth, auth)
-      |> put_req_header("version", "1.3.0-alpha.9.2")
+      |> put_req_header("user-agent", "Codex Desktop/1.3.0-alpha.9.2 (Windows)")
 
     assert {:ok, _auth} = GatewayControllerHelpers.authenticate(cached)
 
