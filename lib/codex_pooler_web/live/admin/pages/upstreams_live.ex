@@ -608,7 +608,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   defp upstreams_page_state(scope, params) do
-    pools = Pools.list_visible_pools(scope)
+    pools = Pools.list_visible_pools(scope, include_disabled: params["status"] == "disabled")
     filter_values = UpstreamFilterForm.filter_values(params, pools)
     filtered_pools = filtered_pools(pools, filter_values)
 
@@ -648,8 +648,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     assign(socket,
       can_manage_pools?: can_manage_pools?,
       pools: pools,
-      pool_options: pool_options(pools),
-      dialog_pool_options: dialog_pool_options(pools),
+      pool_options: pool_options(Enum.filter(pools, &(&1.status == "active"))),
+      dialog_pool_options: dialog_pool_options(Enum.filter(pools, &(&1.status == "active"))),
       pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
       filter_values: filter_values,
       filter_form: UpstreamFilterForm.filter_form(filter_values),

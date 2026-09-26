@@ -166,7 +166,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     # per-identity snapshot work; detail pages must not pay fleet cost.
     {identity_id, filters} = Map.pop(filters, :identity_id)
 
-    pools = intersect_visible_pools(scope, pools)
+    pool_opts = [include_disabled: filters["status"] == "disabled" or is_binary(identity_id)]
+    pools = intersect_visible_pools(scope, pools, pool_opts)
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
     model_inventory = assignment_model_inventory(assignments)
@@ -174,9 +175,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     identities =
       scope
-      |> Upstreams.list_visible_upstream_identities()
+      |> Upstreams.list_visible_upstream_identities(pool_opts)
       |> Enum.filter(&Map.has_key?(assignments, &1.id))
       |> narrow_to_identity(identity_id)
+
+    disabled_pool_identity_ids = disabled_pool_identity_ids(scope, identities, filters)
 
     assignments = narrow_assignments_to_identities(assignments, identities)
     circuit_observed_at = DateTime.utc_now()
@@ -209,7 +212,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         Map.fetch!(quota_snapshots, &1.id)
       )
     )
-    |> Filter.apply(filters)
+    |> Filter.apply(filters, disabled_pool_identity_ids)
   end
 
   defp narrow_to_identity(identities, nil), do: identities
@@ -248,8 +251,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     end)
   end
 
-  defp intersect_visible_pools(scope, pools) do
-    visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)
+  defp disabled_pool_identity_ids(scope, identities, %{"status" => "disabled"}) do
+    active_pool_identity_ids =
+      scope |> Upstreams.list_visible_upstream_identities() |> MapSet.new(& &1.id)
+
+    identities |> MapSet.new(& &1.id) |> MapSet.difference(active_pool_identity_ids)
+  end
+
+  defp disabled_pool_identity_ids(_scope, _identities, _filters), do: MapSet.new()
+
+  defp intersect_visible_pools(scope, pools, opts) do
+    visible_pool_ids = scope |> Pools.list_visible_pools(opts) |> MapSet.new(& &1.id)
     Enum.filter(pools, &MapSet.member?(visible_pool_ids, &1.id))
   end
 

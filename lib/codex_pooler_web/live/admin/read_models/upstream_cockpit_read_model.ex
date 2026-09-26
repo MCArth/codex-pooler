@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp load_visible(scope, identity_id, options) when is_binary(identity_id) do
-    pools = Pools.list_visible_pools(scope)
+    pools = Pools.list_visible_pools(scope, include_disabled: true)
 
     scope
     |> UpstreamAccountsReadModel.list_visible_accounts(

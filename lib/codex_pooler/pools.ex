@@ -62,9 +62,14 @@ defmodule CodexPooler.Pools do
   def list_pools(_scope),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec list_visible_pools(term()) :: [Pool.t()]
-  def list_visible_pools(scope) do
-    case list_pools(scope) do
+  @spec list_visible_pools(term(), keyword()) :: [Pool.t()]
+  def list_visible_pools(scope, opts \\ []) do
+    result =
+      if Keyword.get(opts, :include_disabled, false),
+        do: list_reporting_pools(scope),
+        else: list_pools(scope)
+
+    case result do
       {:ok, pools} -> pools
       {:error, _reason} -> []
     end

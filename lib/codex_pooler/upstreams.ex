@@ -74,9 +74,11 @@ defmodule CodexPooler.Upstreams do
     end
   end
 
-  @spec list_visible_upstream_identities(Scope.t()) :: [UpstreamIdentity.t()]
-  def list_visible_upstream_identities(%Scope{} = scope) do
-    pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
+  @spec list_visible_upstream_identities(Scope.t(), keyword()) :: [UpstreamIdentity.t()]
+  def list_visible_upstream_identities(scope, opts \\ [])
+
+  def list_visible_upstream_identities(%Scope{} = scope, opts) do
+    pool_ids = scope |> Pools.list_visible_pools(opts) |> Enum.map(& &1.id)
 
     case pool_ids do
       [] ->
@@ -100,7 +102,7 @@ defmodule CodexPooler.Upstreams do
     end
   end
 
-  def list_visible_upstream_identities(_scope), do: []
+  def list_visible_upstream_identities(_scope, _opts), do: []
 
   @spec get_upstream_identity(term()) :: UpstreamIdentity.t() | nil
   def get_upstream_identity(id) when is_binary(id), do: Repo.get(UpstreamIdentity, id)

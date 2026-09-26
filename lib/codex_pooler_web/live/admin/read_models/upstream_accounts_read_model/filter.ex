@@ -1,18 +1,27 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Filter do
   @moduledoc false
 
-  @spec apply([map()], map()) :: [map()]
-  def apply(accounts, filters) when is_list(accounts) and is_map(filters) do
+  @spec apply([map()], map(), MapSet.t()) :: [map()]
+  def apply(accounts, filters, disabled_pool_identity_ids)
+      when is_list(accounts) and is_map(filters) do
     accounts
-    |> filter_by_status(Map.get(filters, "status"))
+    |> filter_by_status(Map.get(filters, "status"), disabled_pool_identity_ids)
     |> filter_by_query(Map.get(filters, "query"))
   end
 
-  defp filter_by_status(accounts, status) when is_binary(status) and status != "" do
+  defp filter_by_status(accounts, "disabled", disabled_pool_identity_ids) do
+    Enum.filter(accounts, fn account ->
+      account.identity.status == "disabled" or
+        MapSet.member?(disabled_pool_identity_ids, account.identity.id)
+    end)
+  end
+
+  defp filter_by_status(accounts, status, _disabled_pool_identity_ids)
+       when is_binary(status) and status != "" do
     Enum.filter(accounts, &(&1.identity.status == status))
   end
 
-  defp filter_by_status(accounts, _status), do: accounts
+  defp filter_by_status(accounts, _status, _disabled_pool_identity_ids), do: accounts
 
   defp filter_by_query(accounts, query) when is_binary(query) do
     query = String.downcase(String.trim(query))
